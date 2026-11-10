@@ -31,7 +31,7 @@ import { FEN_BANK } from '../../content/dersler/fen';
 
 // 3. sınıf ders bankaları: sekme id -> banka (her biri 1000 hazır soru)
 const SUBJECT_TABS = [
-  { id: 'eng_questions', label: 'ingilizce', bank: ENGLISH_BANK },
+  { id: 'eng_questions', label: '3. sınıf ingilizce', bank: ENGLISH_BANK },
   { id: 'mat_questions', label: '3. sınıf matematik', bank: MATH_BANK },
   { id: 'trk_questions', label: '3. sınıf türkçe', bank: TURKISH_BANK },
   { id: 'hb_questions', label: '3. sınıf hayat bilgisi', bank: HAYAT_BANK },
