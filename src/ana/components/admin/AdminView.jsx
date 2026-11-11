@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocsFromServer, doc, getDocFromServer, setDoc, writeBatch, serverTimestamp, orderBy, limit, updateDoc, addDoc, getDocs, deleteDoc } from 'firebase/firestore';
-import { EyeOff, Loader2, Image as ImageIcon, Folder, ListChecks, Eye, Edit2, Trash2, FolderOpen, CheckSquare, ClipboardPaste, FolderPlus, CheckCircle, PlusCircle, Copy, Scissors, Atom, Play, ArrowRight, MinusCircle, History, GripVertical, CircleSlash, Globe, Users, User, Settings2, Send, Volume1, Music, Trophy, BarChart2, RefreshCw, Star, Minus, Plus, ChevronLeft, CheckCircle2, X, Check, Palette, Clock, CalendarClock, Shuffle, UploadCloud, ChevronUp, ChevronDown } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { collection, query, where, getDocsFromServer, doc, getDocFromServer, setDoc, writeBatch, serverTimestamp, orderBy, limit, updateDoc, addDoc, getDocs, deleteDoc, getCountFromServer } from 'firebase/firestore';
+import { Layers, EyeOff, Loader2, Image as ImageIcon, Folder, ListChecks, Eye, Edit2, Trash2, FolderOpen, CheckSquare, ClipboardPaste, FolderPlus, CheckCircle, PlusCircle, Copy, Scissors, Atom, Play, ArrowRight, MinusCircle, History, GripVertical, CircleSlash, Globe, Users, User, Settings2, Send, Volume1, Music, Trophy, BarChart2, RefreshCw, Star, Minus, Plus, ChevronLeft, CheckCircle2, X, Check, Palette, Clock, CalendarClock, Shuffle, UploadCloud, ChevronUp, ChevronDown } from 'lucide-react';
 import { DOT_TEMPLATES, DOT_LEVEL_LABELS, generateDotGridSvgDataUrl, normalizeDotLines, DotGridPad } from '../../activities/dotGrid';
 import { COLOR_BOX_TEMPLATES, generateColorGridSvgDataUrl, normalizeColorCells, ColorGridPad } from '../../activities/colorGrid';
 import { generateSudokuSvgDataUrl, SudokuGridPad } from '../../activities/sudoku';
@@ -20,33 +21,47 @@ import { speechTextOf } from '../../activities/instructions';
 import { buildUnits, normalizeStoryOrder, storySiblingIds, moveBlock, stepBlock } from '../../utils/storyOrder';
 import { EVENT_ORDER_LEVELS, EVENT_ORDER_TEXT, getEventOrderTemplates, buildEventOrderPayload } from '../../content/eventOrderBank';
 import { commitOpsInChunks } from '../../utils/firestoreBatch';
-import { getScheduleRef, DEFAULT_SCHEDULE, WEEKDAY_LABELS, initialLastRunDate, previewUpcoming } from '../../utils/publishScheduler';
+import { findQuestionsByField, planOverwrite, removeIdsFromAllTests, mergeQuestionState, stripIdsFromTestState } from '../../utils/overwriteSave';
+import { getScheduleRef, scheduleDocName, DEFAULT_SCHEDULE, WEEKDAY_LABELS, initialLastRunDate, previewUpcoming } from '../../utils/publishScheduler';
 import { MediaUploader } from '../common/MediaUploader';
 import { TemplateBankPanel } from './TemplateBankPanel';
-import { ENGLISH_BANK } from '../../content/dersler/ingilizce';
+import { ENGLISH_BANKS } from '../../content/ingilizce';
 import { MATH_BANK } from '../../content/dersler/matematik';
 import { TURKISH_BANK } from '../../content/dersler/turkce';
 import { HAYAT_BANK } from '../../content/dersler/hayat';
 import { FEN_BANK } from '../../content/dersler/fen';
 
 // 3. sınıf ders bankaları: sekme id -> banka (her biri 1000 hazır soru)
+// İngilizce: her ünite AYRI alt sekme (500 öğretici + 200 test) + Genel Tekrar (300)
 const SUBJECT_TABS = [
-  { id: 'eng_questions', label: 'ingilizce', bank: ENGLISH_BANK },
+  { id: 'eng_questions', label: '3. sınıf ingilizce', banks: ENGLISH_BANKS, subLabel: (b, i) => (i < 6 ? `${i + 1}. ünite` : 'genel tekrar'), subSub: (b) => b.title.split('·').pop().trim() },
   { id: 'mat_questions', label: '3. sınıf matematik', bank: MATH_BANK },
   { id: 'trk_questions', label: '3. sınıf türkçe', bank: TURKISH_BANK },
   { id: 'hb_questions', label: '3. sınıf hayat bilgisi', bank: HAYAT_BANK },
   { id: 'fen_questions', label: '3. sınıf fen bilimleri', bank: FEN_BANK }
 ];
 const SUBJECT_TAB_IDS = SUBJECT_TABS.map(t => t.id);
-import { BILSEM_BANK } from '../../content/bilsem';
+import { BILSEM_BANK } from '../../content/bilsem3';
 import { LISTEN_BANK } from '../../content/listen';
 import { calculateStudentStars } from '../../utils/studentStats';
+// Sınıfım oyun dünyası ayarları (dünyalar, elmas, market, test sonu efektleri) - deneme ile aynı modüller
+import { GameAdminPanel } from '../../../deneme/game/GameAdminPanel';
+import { ExtraStudio } from '../../../deneme/game/ExtraStudio';
+import { loadGameConfig, mergeGameConfig } from '../../../deneme/game/gameConfig';
+import { ref as storageRefOf, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../../firebase';
+import { measureGain, withGain } from '../../utils/audioLevel';
+import { storedStars, getEarnedStars, computeBank } from '../../../deneme/game/progress';
 
 // ============================================================================
 // --- GRUP: YÖNETİCİ PANELİ (ADMIN VIEW) - STATE VE DEĞİŞKENLER ---
 // ============================================================================
-export function AdminView({ childrenList, setChildrenList, questions, setQuestions, tests, setTests, responses, setResponses, folders, appId, onPreview, db, defaultStyle, statsViewMode, setStatsViewMode, statsSelectedTest, setStatsSelectedTest, statsSelectedStudent, setStatsSelectedStudent, onOpenPreviewEditor, onOpenContentEditor, settings, setPreviewEditorQuestion, setContentEditorQuestion, onInspect, fetchAdminTests, fetchAdminChildren, fetchAdminResponses, fetchStatsFromServer, fetchTestQuestionsOnDemand }) {
+export function AdminView({ childrenList, setChildrenList, questions, setQuestions, tests, setTests, responses, setResponses, folders, appId, onPreview, db, defaultStyle, statsViewMode, setStatsViewMode, statsSelectedTest, setStatsSelectedTest, statsSelectedStudent, setStatsSelectedStudent, onOpenPreviewEditor, onOpenContentEditor, settings, setPreviewEditorQuestion, setContentEditorQuestion, onInspect, fetchAdminTests, fetchAdminChildren, fetchAdminResponses, fetchStatsFromServer, fetchTestQuestionsOnDemand, onViewAsStudent, onPreviewLoaded }) {
   const [tab, setTab] = useState('questions');
+  const [subBank, setSubBank] = useState({}); // ders sekmesinin alt sekmesi (ör. İngilizce ünitesi)
+  const [studentsSub, setStudentsSub] = useState('list'); // öğrenciler sekmesinin içi: list | stars | extra
+  const [studentsFolderOpen, setStudentsFolderOpen] = useState(false);
+  const [starBusy, setStarBusy] = useState(null);
   const [editingQ, setEditingQ] = useState(null);
   const [qName, setQName] = useState("");
   const [qText, setQText] = useState("");
@@ -195,6 +210,12 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
   }, [robotFolderRules]);
 
   // --- ZAMANLI YAYIN ---
+  // --- TEST KANALI: ÖDEV (sol taraftaki ödev listesi) / HARİTA (ada ada) ---
+  // Kanalı seçilmemiş eski testler: Sınıfım: ödev
+  const LEGACY_CHANNEL = 'gorev';
+  const chanOf = (t) => (t?.channel === 'gorev' || t?.channel === 'harita' ? t.channel : LEGACY_CHANNEL);
+  const [testChannelTab, setTestChannelTab] = useState(LEGACY_CHANNEL);
+  const schedDoc = scheduleDocName(appId, testChannelTab);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [scheduleLoaded, setScheduleLoaded] = useState(false);
   const [scheduleDirty, setScheduleDirty] = useState(false);
@@ -225,6 +246,35 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
 
   const [selectedPoolQs, setSelectedPoolQs] = useState([]);
   const [selectedFolders, setSelectedFolders] = useState([]);
+  // --- SEÇİMLERİM: kaydedilmiş klasör / soru seçimleri (settings/folder_selections) ---
+  const [selPanel, setSelPanel] = useState(false);
+  const [savedSels, setSavedSels] = useState(null); // null = henüz okunmadı
+  const [selName, setSelName] = useState('');
+  const selDocRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'folder_selections');
+  const toggleSelPanel = async () => {
+    setSelPanel(o => !o);
+    if (savedSels !== null) return;
+    try { const snap = await getDocFromServer(selDocRef()); setSavedSels(snap.exists() ? (snap.data().list || []) : []); }
+    catch (e) { console.error('seçimler okunamadı', e); setSavedSels([]); }
+  };
+  const writeSels = async (list) => {
+    setSavedSels(list);
+    try { await setDoc(selDocRef(), { list, updatedAt: serverTimestamp() }); }
+    catch (e) { console.error(e); alert('seçimler kaydedilemedi.'); }
+  };
+  const saveCurrentSel = () => {
+    if (!selectedFolders.length && !selectedPoolQs.length) { alert('önce klasör (veya soru) kutucuklarını işaretleyin.'); return; }
+    const list = savedSels || [];
+    const name = selName.trim() || `seçim ${list.length + 1}`;
+    writeSels([...list, { id: Date.now().toString(36), name, folders: [...selectedFolders], qs: [...selectedPoolQs] }]);
+    setSelName('');
+  };
+  const applySel = (sel) => {
+    const live = new Set(folders.map(f => f.id));
+    setSelectedFolders((sel.folders || []).filter(id => live.has(id)));
+    setSelectedPoolQs([...(sel.qs || [])]);
+  };
+  const deleteSel = (sel) => { if (window.confirm(`"${sel.name}" seçimi silinsin mi?`)) writeSels((savedSels || []).filter(x => x.id !== sel.id)); };
   const [bulkName, setBulkName] = useState("");
 
   // --- SEÇİLİ KLASÖR VEYA SORULAR İÇİN TOPLU SÜRE VE HAFIZA DEĞİŞTİRME STATE'LERİ ---
@@ -501,40 +551,264 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
     setBarGraphData({ ...item });
   };
 
-  // Toplu Şablon Kaydetme Yardımcısı (Herhangi Bir Şablon Havuzundan Tek Tıkla Tüm Şablonları Soruya Dönüştürüp Klasöre Kaydeder)
-  const handleBulkGenerateQuestions = async (itemsArray, buildQuestionObjectFn, labelText) => {
-    const targetFolderName = folders.find(f => f.id === qFolderId)?.name || "Havuz (Ana Dizin)";
-    if (!window.confirm(`${itemsArray.length} adet "${labelText}" şablonunu (${qTimeLimit} sn, ${isMem ? `Hafıza: ${memTime} sn` : 'Daimi Göster'} ayarıyla) "${targetFolderName}" klasörüne otomatik olarak soruya dönüştürüp kaydetmek istediğinize emin misiniz?`)) return;
+  // ==========================================================================
+  // --- ETKİLEŞİMLİ ŞABLONLARI KAYDETME (üzerine yazmalı + otomatik klasör) ---
+  // ==========================================================================
+  // Her şablon kalıcı bir kimlik alır (ixKey: "dot|4|17" gibi). Aynı şablon tekrar
+  // kaydedilince yeni kopya oluşmaz; eski kaydın ÜZERİNE yazılır (kimlik aynı kaldığı
+  // için testlerdeki yeri korunur). Bu sistemden önce kaydedilmiş sorular, aynı ad
+  // veya aynı resimle eşleşirse onların da üzerine yazılır.
+  const IX_ROOT_FOLDER = 'Etkileşimli Sorular';
+  const [ixBusy, setIxBusy] = useState('');
+
+  // "Etkileşimli Sorular › Noktalı Çizim › 4x4 › Kolay" gibi klasör yollarını oluşturur
+  const ensureIxFolders = async (paths) => {
+    let list = [...folders];
+    let changed = false;
+    const findOrAdd = (name, parentId) => {
+      let f = list.find(x => x.name === name && (x.parentId || null) === (parentId || null));
+      if (!f) { f = { id: `folder_${Date.now()}_${Math.floor(Math.random() * 1e6)}`, name, parentId: parentId || null }; list.push(f); changed = true; }
+      return f.id;
+    };
+    const rootId = findOrAdd(IX_ROOT_FOLDER, null);
+    const map = new Map();
+    paths.forEach(p => {
+      const k = (p || []).join(' › ');
+      if (map.has(k)) return;
+      let pid = rootId; (p || []).forEach(name => { pid = findOrAdd(name, pid); });
+      map.set(k, pid);
+    });
+    if (changed) await saveFolders(list);
+    return (p) => map.get((p || []).join(' › ')) || rootId;
+  };
+
+  /**
+   * entries: [{ key, path: ['Noktalı Çizim', '4x4', 'Kolay'], setId, legacyType, build: () => soruNesnesi }]
+   * light: true ise yeni sorular ekrandaki listeye eklenmez (binlerce soruda ekran donmasın)
+   */
+  const saveInteractiveEntries = async (entries, { label, light = false } = {}) => {
+    if (!entries || entries.length === 0) return;
+    const setIds = Array.from(new Set(entries.map(e => e.setId)));
+    const legacyTypes = Array.from(new Set(entries.map(e => e.legacyType).filter(Boolean)));
+    const wantKeys = new Set(entries.map(e => e.key));
     setIsSaving(true);
+    setIxBusy('daha önce kaydedilenler kontrol ediliyor...');
     try {
-      const createdList = [];
-      const ops = [];
-      itemsArray.forEach((tpl, idx) => {
-        const newRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'questions'));
-        const built = buildQuestionObjectFn(tpl, idx);
-        const qPayload = {
-          ...built,
-          ttsText: built.ttsText || built.text || '',
-          ttsOn: Boolean(ttsDefaultOn && (built.ttsText || built.text)),
+      const keyed = (await findQuestionsByField(db, appId, 'ixSet', setIds)).filter(e => wantKeys.has(e.data.ixKey));
+      const legacy = legacyTypes.length ? (await findQuestionsByField(db, appId, 'questionType', legacyTypes)).filter(e => !e.data.ixKey) : [];
+      setIxBusy('');
+      // Eski sistemle kaydedilmiş sorular: aynı ad veya aynı resim → aynı şablon
+      const legacyByName = new Map(); const legacyByImg = new Map();
+      legacy.forEach(e => {
+        if (e.data.name && !legacyByName.has(`${e.data.questionType}|${e.data.name}`)) legacyByName.set(`${e.data.questionType}|${e.data.name}`, e);
+        if (e.data.image && !legacyByImg.has(e.data.image)) legacyByImg.set(e.data.image, e);
+      });
+      const keyedKeys = new Set(keyed.map(e => e.data.ixKey));
+      const usedLegacy = new Set();
+      const built = entries.map(en => ({ en, obj: en.build() }));
+      const legacyMatched = [];
+      built.forEach(({ en, obj }) => {
+        if (keyedKeys.has(en.key)) return;
+        const hit = legacyByName.get(`${obj.questionType}|${obj.name}`) || (obj.image ? legacyByImg.get(obj.image) : null);
+        if (hit && !usedLegacy.has(hit.id)) { usedLegacy.add(hit.id); legacyMatched.push({ ...hit, __key: en.key }); }
+      });
+      const already = keyed.length + legacyMatched.length;
+      const target = qFolderId ? `"${folders.find(f => f.id === qFolderId)?.name || 'seçili'}" klasörüne` : `"${IX_ROOT_FOLDER} › ..." klasörlerine (otomatik)`;
+      let msg = `${label ? `${label}\n\n` : ''}${entries.length} soru ${target} kaydedilsin mi?\n(${qTimeLimit} sn, ${isMem ? `hafıza ${memTime} sn` : 'daimi göster'})`;
+      if (already > 0) msg += `\n\n⚠️ DİKKAT: Bunlardan ${already} soru daha önce kaydedilmiş.\nTAMAM derseniz ÜZERİNE kaydedilir: eski sorular silinip yerine yenileri yazılır.\nTestlere eklenmiş sorular testteki yerinde kalır.`;
+      if (!window.confirm(msg)) { setIsSaving(false); return; }
+      setIxBusy('klasörler hazırlanıyor...');
+      const folderOf = qFolderId ? (() => qFolderId) : await ensureIxFolders(entries.map(e => e.path));
+      const items = built.map(({ en, obj }) => ({
+        matchKey: en.key,
+        data: {
+          ...obj,
+          ttsText: obj.ttsText || obj.text || '',
+          ttsOn: obj.ttsOn !== undefined ? obj.ttsOn : Boolean(ttsDefaultOn && (obj.ttsText || obj.text)),
           timeLimit: Number(qTimeLimit),
           isMemory: isMem,
           memoryTime: Number(memTime),
-          folderId: qFolderId || null,
+          folderId: folderOf(en.path) || null,
           style: defaultStyle,
+          ixSet: en.setId,
+          ixKey: en.key,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
-        };
-        ops.push({ type: 'set', ref: newRef, data: qPayload });
-        createdList.push({ ...qPayload, id: newRef.id, createdAt: { seconds: Math.floor(Date.now() / 1000) } });
-      });
-      await commitOpsInChunks(db, ops);
-      setQuestions(prev => [...createdList, ...prev]);
-      alert(`${createdList.length} adet "${labelText}" sorusu "${targetFolderName}" içerisine başarıyla kaydedildi!`);
+        }
+      }));
+      const plan = planOverwrite(db, appId, items, [...keyed, ...legacyMatched], e => e.__key || e.data.ixKey);
+      const res = await commitOpsInChunks(db, plan.ops, { onProgress: (d, t) => setIxBusy(`kaydediliyor... ${d}/${t}`) });
+      await removeIdsFromAllTests(db, appId, plan.deletedIds);
+      setTests(prev => stripIdsFromTestState(prev, plan.deletedIds));
+      if (light) {
+        const byId = new Map(plan.created.map(c => [c.id, c])); const gone = new Set(plan.deletedIds);
+        setQuestions(prev => prev.filter(q => !gone.has(q.id)).map(q => byId.get(q.id) || q));
+      } else {
+        setQuestions(prev => mergeQuestionState(prev, plan.created, plan.deletedIds));
+      }
+      const yeni = plan.created.length - plan.updatedIds.length;
+      alert(`${plan.created.length} soru kaydedildi.${plan.updatedIds.length ? `\n${plan.updatedIds.length} soru eskisinin üzerine yazıldı, ${yeni} soru yeni eklendi.` : ''}${plan.deletedIds.length ? `\n${plan.deletedIds.length} fazla kopya silindi.` : ''}${res.skipped.length ? `\n${res.skipped.length} soru boyut sınırı nedeniyle atlandı.` : ''}`);
     } catch (e) {
-      console.error("Toplu üretim hatası:", e);
-      alert("Toplu üretim sırasında hata oluştu.");
+      console.error('Toplu kayıt hatası:', e);
+      alert('Toplu kayıt sırasında hata oluştu: ' + (e?.message || ''));
     }
+    setIxBusy('');
     setIsSaving(false);
+  };
+
+  // --- BÜTÜN ETKİLEŞİMLİ ŞABLONLAR (15 alt sekme, tüm boyut ve seviyeler) ---
+  // Alt sekmelerdeki düğmelerle AYNI soru üretilir ve aynı kimliği alır; böylece
+  // önce tek tek kaydedilmiş olanların da üzerine yazılır.
+  const buildAllInteractiveEntries = () => {
+    const T = (def) => qText.trim() || def;
+    const out = [];
+    const push = (setId, legacyType, key, path, build) => out.push({ setId, legacyType, key, path, build });
+    // 1. Noktalı çizim
+    Object.keys(DOT_TEMPLATES).map(Number).forEach(r => (DOT_TEMPLATES[r] || []).forEach((tpl, i) => push('dot', 'dot_grid', `dot|${r}|${i}`, ['Noktalı Çizim', `${r}x${r}`, DOT_LEVEL_LABELS[tpl.difficulty] || 'Kolay'], () => ({
+      name: `${r}x${r} Noktalı Çizim #${i + 1} (${DOT_LEVEL_LABELS[tpl.difficulty] || 'Kolay'})`,
+      text: T("Noktaları birleştirerek şekli tamamlayalım."),
+      image: generateDotGridSvgDataUrl(r, r, tpl.lines),
+      questionType: 'dot_grid',
+      dotGrid: { rows: r, cols: r, lines: tpl.lines, difficulty: tpl.difficulty || 'easy' },
+      options: [], correctText: 'dot_grid', correctIndex: 0
+    }))));
+    // 2. Kutu boyama
+    Object.keys(COLOR_BOX_TEMPLATES).map(Number).forEach(r => (COLOR_BOX_TEMPLATES[r] || []).forEach((tpl, i) => push('color_box', 'color_grid', `color_box|${r}|${i}`, ['Kutu Boyama', `${r}x${r}`], () => ({
+      name: `${r}x${r} Kutu Boyama #${i + 1}`,
+      text: T("Örnekteki gibi kutuları uygun renklerle boyayalım."),
+      image: generateColorGridSvgDataUrl(r, r, tpl.cells),
+      questionType: 'color_grid',
+      colorGrid: { rows: r, cols: r, cells: tpl.cells },
+      options: [], correctText: 'color_grid', correctIndex: 0
+    }))));
+    // 3. Sudoku
+    [3, 4, 5].forEach(sz => SUDOKU_LEVELS.forEach(l => getSudokuBank(sz, l.id).forEach((_, i) => push('sudoku', 'sudoku_grid', `sudoku|${sz}|${l.id}|${i}`, ['Sudoku', `${sz}x${sz}`, l.label], () => sudokuQuestionFromTpl(getSudokuTpl(sz, l.id, i), i)))));
+    // 4-5. Kutu ve çizgi kodlama
+    ['box_coding', 'line_coding'].forEach(mode => Object.keys(CODING_TEMPLATES).map(Number).forEach(sz => (CODING_TEMPLATES[sz] || []).forEach((tpl, i) => push(mode, mode, `${mode}|${sz}|${i}`, [mode === 'line_coding' ? 'Çizgi Kodlama' : 'Kutu Kodlama', `${sz}x${sz}`], () => {
+      const isLine = mode === 'line_coding';
+      const effMethod = (!isLine && codingMethod === 'method3') ? 'method1' : codingMethod;
+      const codingData = { mode: isLine ? 'line' : 'box', method: effMethod, rows: sz, cols: sz, path: tpl.path, arrows: tpl.arrows, startImage: codingStartImg || "", targetImage: codingTargetImg || "" };
+      return {
+        name: `${sz}x${sz} ${isLine ? 'Çizgi Kodlama' : 'Kutu Kodlama'} #${i + 1}`,
+        text: T("Köpeği kemiğe ulaştırmak için doğru adımları sırasıyla seç."),
+        image: generateCodingGridSvgDataUrl(codingData),
+        questionType: isLine ? 'line_coding' : 'box_coding',
+        codingGrid: codingData,
+        options: [], correctText: isLine ? 'line_coding' : 'box_coding', correctIndex: 0
+      };
+    }))));
+    // 6. Renk örüntüsü
+    Object.keys(PATTERN_TEMPLATES).forEach(pt => (PATTERN_TEMPLATES[pt] || []).forEach((tpl, i) => push('color_pattern', 'color_pattern', `color_pattern|${pt}|${i}`, ['Renk Örüntüsü', `${pt}'li`], () => ({
+      name: `${pt}'li Renk Örüntüsü #${i + 1}`,
+      text: T("Örüntüdeki boş kutuları uygun renkle tamamla."),
+      image: generatePatternSvgDataUrl(tpl.cells, tpl.hiddenIndices),
+      questionType: 'color_pattern',
+      patternGrid: { period: tpl.period, cells: tpl.cells, hiddenIndices: tpl.hiddenIndices },
+      options: [], correctText: 'color_pattern', correctIndex: 0
+    }))));
+    // 7. Simetri
+    Object.keys(SYMMETRY_TEMPLATES).map(Number).forEach(sz => (SYMMETRY_TEMPLATES[sz] || []).forEach((tpl, i) => push('symmetry', 'symmetry_grid', `symmetry|${sz}|${i}`, ['Simetri', `${sz}x${sz}`], () => ({
+      name: `${sz}x${sz} Simetri #${i + 1} (${tpl.title})`,
+      text: T("Sol taraftaki şeklin simetriğini sağ tarafa boyayalım."),
+      image: generateSymmetrySvgDataUrl({ size: sz, leftCells: tpl.leftCells }),
+      questionType: 'symmetry_grid',
+      symmetryGrid: { size: sz, leftCells: tpl.leftCells },
+      options: [], correctText: 'symmetry_grid', correctIndex: 0
+    }))));
+    // 8-9. Tablo oluşturma / boyama
+    MATRIX_SHAPE_TEMPLATES.forEach((tpl, i) => push('matrix_shape', 'matrix_shape', `matrix_shape|${i}`, ['Tablo Oluşturma'], () => ({
+      name: `Tablo Oluşturma #${i + 1}`,
+      text: T("Satır ve sütundaki şekilleri birleştirerek tabloyu tamamla."),
+      image: generateMatrixShapeSvgDataUrl(tpl),
+      questionType: 'matrix_shape', matrixShapeGrid: tpl,
+      options: [], correctText: 'matrix_shape', correctIndex: 0
+    })));
+    MATRIX_PAINT_TEMPLATES.forEach((tpl, i) => push('matrix_paint', 'matrix_paint', `matrix_paint|${i}`, ['Tablo Boyama'], () => ({
+      name: `Tablo Boyama #${i + 1}`,
+      text: T("Örnekteki gibi uygun renkleri boyayalım."),
+      image: generateMatrixPaintSvgDataUrl(tpl),
+      questionType: 'matrix_paint', matrixPaintGrid: tpl,
+      options: [], correctText: 'matrix_paint', correctIndex: 0
+    })));
+    // 10. Sıralı çizgi
+    Object.keys(NUMBER_CONNECT_TEMPLATES).forEach(lvl => (NUMBER_CONNECT_TEMPLATES[lvl] || []).forEach((tpl, i) => push('number_connect', 'number_connect', `number_connect|${lvl}|${i}`, ['Sıralı Çizgi', lvl === 'hard' ? 'Zor' : 'Orta'], () => {
+      const { id: _i, ...data } = tpl;
+      return {
+        name: `${lvl === 'hard' ? 'Zor' : 'Orta'} Sıralı Çizgi #${i + 1}`,
+        text: T("Üstteki sıraya bak. Şekilleri aynı renk sırasıyla çizgiyle birleştir."),
+        image: generateNumberConnectSvgDataUrl(data),
+        questionType: 'number_connect', numberConnectGrid: data,
+        options: [], correctText: 'number_connect', correctIndex: 0
+      };
+    })));
+    // 11. Labirent
+    Object.keys(MAZE_TEMPLATES).forEach(lvl => (MAZE_TEMPLATES[lvl] || []).forEach((tpl, i) => push('maze', 'interactive_maze', `maze|${lvl}|${i}`, ['Labirent', MAZE_LEVELS[lvl]?.label || 'Kolay'], () => {
+      const payload = buildMazePayload(tpl, { startImage: mazeStartImg || "", endImage: mazeEndImg || "" });
+      return {
+        name: `${MAZE_LEVELS[lvl]?.label || 'Kolay'} Labirent #${i + 1}`,
+        text: T("Parmağınla doğru yolu takip ederek başlangıçtan hedefe ulaş."),
+        image: generateMazeSvgDataUrl(payload),
+        questionType: 'interactive_maze', mazeGrid: payload,
+        options: [], correctText: 'interactive_maze', correctIndex: 0
+      };
+    })));
+    // 12. Gölge bulma
+    Object.keys(SHADOW_QUIZ_TEMPLATES).forEach(lvl => (SHADOW_QUIZ_TEMPLATES[lvl] || []).forEach((tpl, i) => push('shadow_quiz', null, `shadow_quiz|${lvl}|${i}`, ['Gölge Bulma', ({ easy: 'Kolay', medium: 'Orta', hard: 'Zor' })[lvl] || 'Orta'], () => ({
+      name: tpl.title,
+      text: T("Yukarıdaki resmin doğru gölgesi hangisidir?"),
+      image: qCustomAttachmentImg || tpl.mainImage,
+      options: tpl.options, correctText: "", correctIndex: tpl.correctIndex
+    }))));
+    // 13. Grafik oluşturma
+    Object.keys(BAR_GRAPH_TEMPLATES).forEach(lvl => (BAR_GRAPH_TEMPLATES[lvl] || []).forEach((tpl, i) => push('bar_graph', 'bar_graph', `bar_graph|${lvl}|${i}`, ['Grafik Oluşturma', lvl === 'easy' ? 'Kolay' : lvl === 'medium' ? 'Orta' : 'Zor'], () => ({
+      name: `${lvl === 'easy' ? 'Kolay' : lvl === 'medium' ? 'Orta' : 'Zor'} Grafik Oluşturma #${i + 1}`,
+      text: T("Resimleri say ve kaç tane varsa o kadar kutucuk boya."),
+      image: generateBarGraphSvgDataUrl(buildBarGraphPayload(tpl)),
+      questionType: 'bar_graph', barGraphGrid: buildBarGraphPayload(tpl),
+      options: [], correctText: 'bar_graph', correctIndex: 0
+    }))));
+    // 14. Sırayı takip et
+    Object.keys(SEQUENCE_TEMPLATES).forEach(cnt => Object.keys(SEQUENCE_TEMPLATES[cnt] || {}).forEach(lvl => (SEQUENCE_TEMPLATES[cnt][lvl] || []).forEach((tpl, i) => push('sequence_memory', 'sequence_memory', `sequence_memory|${cnt}|${lvl}|${i}`, ['Sırayı Takip Et', `${cnt} Kare`, SEQUENCE_LEVELS[lvl]?.label || lvl], () => {
+      const payload = buildSequencePayload(tpl, { allowReplay: seqAllowReplay });
+      return {
+        name: `${cnt} Kare - ${SEQUENCE_LEVELS[lvl]?.label || lvl} Sırayı Takip Et #${i + 1}`,
+        text: T("Kareler hangi sırayla yandı? Sen de aynı sırayla dokun."),
+        image: generateSequenceSvgDataUrl(payload),
+        questionType: 'sequence_memory', sequenceGrid: payload,
+        options: [], correctText: 'sequence_memory', correctIndex: 0
+      };
+    }))));
+    // 15. Olay sıralama
+    Object.keys(EVENT_ORDER_LEVELS).forEach(lvl => getEventOrderTemplates(lvl).forEach((tpl, i) => push('event_order', 'event_order', `event_order|${lvl}|${i}`, ['Olay Sıralama', EVENT_ORDER_LEVELS[lvl].label], () => {
+      const payload = buildEventOrderPayload(tpl);
+      return {
+        name: `${EVENT_ORDER_LEVELS[lvl].label} Olay Sıralama #${i + 1} • ${tpl.title}`,
+        text: T(EVENT_ORDER_TEXT),
+        ttsText: T(EVENT_ORDER_TEXT),
+        ttsOn: true,
+        image: generateEventOrderSvgDataUrl(payload),
+        questionType: 'event_order', eventOrderGrid: payload,
+        options: [], correctText: 'event_order', correctIndex: 0
+      };
+    })));
+    return out;
+  };
+  const saveAllInteractive = async () => {
+    const all = buildAllInteractiveEntries();
+    await saveInteractiveEntries(all, { label: '"Etkileşimli Sorular" sekmesinin TAMAMI (15 etkinlik, bütün boyut ve seviyeler)', light: true });
+  };
+
+  // Alt sekmelerdeki "şablonları soruya dönüştür" düğmeleri.
+  // opts: { setId, legacyType, keyOf(tpl, idx), path | pathOf(tpl, idx) }
+  const handleBulkGenerateQuestions = async (itemsArray, buildQuestionObjectFn, labelText, opts = {}) => {
+    const entries = (itemsArray || []).map((tpl, idx) => ({
+      key: opts.keyOf ? opts.keyOf(tpl, idx) : `${opts.setId || 'ix'}|${labelText}|${idx}`,
+      path: opts.pathOf ? opts.pathOf(tpl, idx) : (opts.path || [labelText]),
+      setId: opts.setId || 'ix',
+      legacyType: opts.legacyType,
+      build: () => buildQuestionObjectFn(tpl, idx)
+    }));
+    await saveInteractiveEntries(entries, { label: `"${labelText}"` });
   };
 
   useEffect(() => {
@@ -568,6 +842,14 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
   const handleTabClick = (newTab) => {
     setTab(newTab);
   };
+
+  // --- SINIFIM OYUN AYARLARI (settings/game_config, appKind: 'ana') ---
+  const [anaGameCfg, setAnaGameCfg] = useState(() => mergeGameConfig({}, 'ana'));
+  const [anaGameCfgLoaded, setAnaGameCfgLoaded] = useState(false);
+  useEffect(() => {
+    if ((tab !== 'game' && tab !== 'game_fx') || anaGameCfgLoaded) return;
+    loadGameConfig(db, appId, { serverFirst: true, kind: 'ana' }).then(c => { setAnaGameCfg(c); setAnaGameCfgLoaded(true); });
+  }, [tab, anaGameCfgLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFetchStats = async () => {
     setIsSaving(true);
@@ -764,6 +1046,39 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
   };
 
   const sortedChildrenList = [...childrenList].sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+
+  // --- YILDIZLAR (okuma tasarruflu) ---
+  // Cevaplar okunmaz. Yıldız, öğrencinin kendi cihazının oyun kaydına yazdığı özetten gelir
+  // (öğrenci kaydı başına 1 okuma). Yeni sürümle henüz girmemiş öğrenci için "hesapla" düğmesi
+  // sadece o öğrencinin cevaplarını okur ve sonucu kaydına yazar (bir daha okunmaz).
+  const refreshChildrenFromServer = async () => {
+    setIsSaving(true);
+    try {
+      const snap = await getDocsFromServer(collection(db, 'artifacts', appId, 'public', 'data', 'children'));
+      setChildrenList(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+    } catch (e) { console.error(e); alert('öğrenciler yenilenemedi.'); }
+    setIsSaving(false);
+  };
+  const computeStarsFor = async (child) => {
+    setStarBusy(child.id);
+    try {
+      let tlist = tests;
+      if (!tlist.length) {
+        const ts = await getDocsFromServer(collection(db, 'artifacts', appId, 'public', 'data', 'tests'));
+        tlist = ts.docs.map(d => ({ ...d.data(), id: d.id }));
+      }
+      const snap = await getDocsFromServer(query(collection(db, 'artifacts', appId, 'public', 'data', 'responses'), where('childId', '==', child.childId)));
+      const resp = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+      // öğrenci uygulamasıyla aynı kural: yıldız sadece ödev testlerinden (ayarlanan miktarda); kasadaki eski yıldızlar korunur
+      const cfgA = anaGameCfgLoaded ? anaGameCfg : await loadGameConfig(db, appId, { serverFirst: true, kind: 'ana' });
+      const pub = tlist.filter(t => t.isPublished !== false);
+      const bank = computeBank(child, pub, resp, cfgA).bank; // eski haritadan kazanılan yıldızlar da sayılır
+      const earned = Math.max(0, getEarnedStars({ ...child, manualStars: 0, game: { ...(child.game || {}), bank } }, pub, resp, { ...cfgA, welcomeStars: 0 }));
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'children', child.id), { 'game.tstars': earned });
+      setChildrenList(prev => prev.map(c => c.id === child.id ? { ...c, game: { ...(c.game || {}), tstars: earned } } : c));
+    } catch (e) { console.error(e); alert('yıldız hesaplanamadı.'); }
+    setStarBusy(null);
+  };
 
   // Soru kaydedildiğinde eğer "Sabitle" (keepSettingsPinned) açıksa Süre, Hafıza ve Klasör ayarlarına DOKUNMAZ!
   const resetQ = () => {
@@ -1213,6 +1528,34 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
     return result;
   };
 
+  // --- SEÇİLİ KLASÖRLERDEKİ SORU SAYISI ---
+  // Soruları tek tek okumaz: Firestore "sayım" sorgusu kullanır (30 klasöre kadar 1 sorgu,
+  // 1000 soruya kadar 1 okuma ücreti). Aynı seçim tekrar sayılmaz (önbellek).
+  const [folderQCount, setFolderQCount] = useState({ key: '', count: null, loading: false });
+  const folderCountCache = React.useRef(new Map());
+  useEffect(() => {
+    if (!selectedFolders.length) { setFolderQCount({ key: '', count: null, loading: false }); return; }
+    const ids = Array.from(new Set(selectedFolders.flatMap(fId => getAllDescendantFolderIds(fId)))).sort();
+    const key = ids.join('|');
+    if (folderCountCache.current.has(key)) { setFolderQCount({ key, count: folderCountCache.current.get(key), loading: false }); return; }
+    setFolderQCount(prev => ({ ...prev, key, loading: true }));
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const qRef = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+        let total = 0;
+        for (let i = 0; i < ids.length; i += 30) {
+          const snap = await getCountFromServer(query(qRef, where('folderId', 'in', ids.slice(i, i + 30))));
+          total += snap.data().count;
+        }
+        folderCountCache.current.set(key, total);
+        if (!cancelled) setFolderQCount({ key, count: total, loading: false });
+      } catch (e) { console.warn('soru sayımı yapılamadı', e); if (!cancelled) setFolderQCount({ key, count: null, loading: false }); }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [selectedFolders.join('|'), folders]);
+  const folderQCountText = !selectedFolders.length ? '' : folderQCount.loading ? ' · sayılıyor…' : folderQCount.count == null ? '' : ` · ${folderQCount.count} soru`;
+
   // --- SEÇİLİ KLASÖR VEYA SORULARIN SÜRESİNİ VE HAFIZA ÖZELLİĞİNİ TOPLU DEĞİŞTİRME ---
   const handleBulkUpdateSettingsForSelection = async () => {
     if (selectedPoolQs.length === 0 && selectedFolders.length === 0) {
@@ -1335,6 +1678,120 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
     setIsSaving(false);
   };
   const BULK_AUDIO_SLOTS = { preAudio1: 'ön ses 1 (ilk çalar)', preAudio2: 'ön ses 2 (ikinci çalar)', audio: 'soru sesi' };
+
+  // --- ETKİLEŞİMLİ SORULARA TOPLU SES (etkinlik etkinlik) ---
+  // [etkinlik kimliği (ixSet), eski soru tipi, ad, varsayılan yönerge]
+  const IX_AUDIO_ACTS = [
+    ['dot', 'dot_grid', '1. Noktalı Çizim', 'Noktaları birleştirerek şekli tamamlayalım.'],
+    ['color_box', 'color_grid', '2. Kutu Boyama', 'Örnekteki gibi kutuları uygun renklerle boyayalım.'],
+    ['sudoku', 'sudoku_grid', '3. Sudoku', 'Boş kutuları tamamla. Her satırda ve her sütunda her resim bir kez olmalı.'],
+    ['box_coding', 'box_coding', '4. Kutu Kodlama', 'Köpeği kemiğe ulaştırmak için doğru adımları sırasıyla seç.'],
+    ['line_coding', 'line_coding', '5. Çizgi Kodlama', 'Köpeği kemiğe ulaştırmak için doğru adımları sırasıyla seç.'],
+    ['color_pattern', 'color_pattern', '6. Renk Örüntüsü', 'Örüntüdeki boş kutuları uygun renkle tamamla.'],
+    ['symmetry', 'symmetry_grid', '7. Simetri Çalışması', 'Sol taraftaki şeklin simetriğini sağ tarafa boyayalım.'],
+    ['matrix_shape', 'matrix_shape', '8. Tablo Oluşturma', 'Satır ve sütundaki şekilleri birleştirerek tabloyu tamamla.'],
+    ['matrix_paint', 'matrix_paint', '9. Tablo Boyama', 'Örnekteki gibi uygun renkleri boyayalım.'],
+    ['number_connect', 'number_connect', '10. Sıralı Çizgi', 'Üstteki sıraya bak. Şekilleri aynı renk sırasıyla çizgiyle birleştir.'],
+    ['maze', 'interactive_maze', '11. Labirent', 'Parmağınla doğru yolu takip ederek başlangıçtan hedefe ulaş.'],
+    ['shadow_quiz', null, '12. Gölge Bulma Testi', 'Yukarıdaki resmin doğru gölgesi hangisidir?'],
+    ['bar_graph', 'bar_graph', '13. Grafik Oluşturma', 'Resimleri say ve kaç tane varsa o kadar kutucuk boya.'],
+    ['sequence_memory', 'sequence_memory', '14. Sırayı Takip Et', 'Kareler hangi sırayla yandı? Sen de aynı sırayla dokun.'],
+    ['event_order', 'event_order', '15. Olay Sıralama', EVENT_ORDER_TEXT],
+  ];
+  const [ixAudioAct, setIxAudioAct] = useState('dot');
+  const [ixAudioSlot, setIxAudioSlot] = useState('audio');
+  const [ixAudioUrl, setIxAudioUrl] = useState('');
+  // bir etkinliğin bütün sorularına sesi yazar (soru sayısını döner)
+  const applyAudioToAct = async (act, slot, val, onlyWithAudio = false) => {
+    const keyed = await findQuestionsByField(db, appId, 'ixSet', [act[0]]);
+    const legacy = act[1] ? await findQuestionsByField(db, appId, 'questionType', [act[1]]) : [];
+    const found = new Map();
+    [...keyed, ...legacy].forEach(e => found.set(e.id, e));
+    let list = Array.from(found.values());
+    if (onlyWithAudio) list = list.filter(e => e.data && e.data[slot]);
+    if (!list.length) return 0;
+    await commitOpsInChunks(db, list.map(e => ({ type: 'update', ref: doc(db, 'artifacts', appId, 'public', 'data', 'questions', e.id), data: { [slot]: val, updatedAt: serverTimestamp() } })));
+    const ids = new Set(list.map(e => e.id));
+    setQuestions(prev => prev.map(q => ids.has(q.id) ? { ...q, [slot]: val } : q));
+    return list.length;
+  };
+  const applyIxAudio = async (remove) => {
+    const act = IX_AUDIO_ACTS.find(a => a[0] === ixAudioAct);
+    if (!act || (!remove && !ixAudioUrl)) return;
+    if (!window.confirm(`"${act[2]}" etkinliğinin bütün sorularına:\n\n"${BULK_AUDIO_SLOTS[ixAudioSlot]}" ${remove ? 'KALDIRILACAK' : 'olarak yüklenen ses eklenecek'}.\n\nDevam edilsin mi?`)) return;
+    setIsSaving(true);
+    try {
+      const n = await applyAudioToAct(act, ixAudioSlot, remove ? '' : ixAudioUrl, remove);
+      alert(n ? `${n} soru güncellendi.` : (remove ? `"${act[2]}" sorularında kaldırılacak ses yok.` : `"${act[2]}" etkinliğinde kayıtlı soru bulunamadı. önce soruları kaydedin.`));
+    } catch (e) {
+      console.error('etkileşimli toplu ses hatası', e);
+      alert('sesler eklenirken hata oluştu.');
+    } finally { setIsSaving(false); }
+  };
+
+  // --- BÜTÜN SESLERİ BİRDEN SEÇ: her ses uygun etkinliğe kendiliğinden yerleşir ---
+  // eşleştirme: 1) dosya adındaki sıra numarası (1-15)  2) dosya adındaki kelimeler (yönerge metniyle)  3) kalanlar dosya sırasıyla
+  const [ixMulti, setIxMulti] = useState(null); // null | { files: File[], map: { actId: fileIndex|'' } }
+  const trNorm = (t) => String(t || '').normalize('NFC').toLocaleLowerCase('tr').replace(/ı/g, 'i').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const matchIxFiles = (files) => {
+    const acts = IX_AUDIO_ACTS;
+    const actWords = acts.map(a => new Set(trNorm(`${a[2].replace(/^\d+\.\s*/, '')} ${a[3]}`).split(' ').filter(w => w.length > 2)));
+    const map = {};
+    const used = new Set();
+    const cands = files.map((f, fi) => {
+      const base = trNorm(f.name.replace(/\.[^.]+$/, ''));
+      const nums = (base.match(/\b\d{1,2}\b/g) || []).map(Number).filter(n => n >= 1 && n <= acts.length);
+      if (nums.length) return { fi, acts: [nums[0] - 1], how: 'num' };
+      const words = base.split(' ').filter(w => w.length > 2);
+      const scores = actWords.map(set => words.filter(w => set.has(w)).length);
+      const best = Math.max(0, ...scores);
+      return { fi, acts: best >= 2 ? scores.map((sc, ai) => (sc === best ? ai : -1)).filter(ai => ai >= 0) : [], how: 'text' };
+    });
+    // 1-2) numara ve kelime eşleşmeleri (aynı metinli etkinlikler aynı sesi alabilir)
+    ['num', 'text'].forEach(how => cands.filter(c => c.how === how && c.acts.length).forEach(c => {
+      c.acts.forEach(ai => { if (map[acts[ai][0]] === undefined) { map[acts[ai][0]] = c.fi; used.add(c.fi); } });
+    }));
+    // 3) kalan dosyalar kalan etkinliklere sırayla
+    const restFiles = files.map((_, fi) => fi).filter(fi => !used.has(fi));
+    acts.forEach(a => { if (map[a[0]] === undefined && restFiles.length) map[a[0]] = restFiles.shift(); });
+    acts.forEach(a => { if (map[a[0]] === undefined) map[a[0]] = ''; });
+    return map;
+  };
+  const onPickIxFiles = (e) => {
+    const files = Array.from(e.target.files || []).sort((a, b) => a.name.localeCompare(b.name, 'tr', { numeric: true }));
+    e.target.value = '';
+    if (!files.length) return;
+    setIxMulti({ files, map: matchIxFiles(files) });
+  };
+  const applyIxMulti = async () => {
+    if (!ixMulti) return;
+    const pairs = IX_AUDIO_ACTS.filter(a => ixMulti.map[a[0]] !== '' && ixMulti.map[a[0]] !== undefined);
+    if (!pairs.length) { alert('hiçbir etkinliğe ses seçilmedi.'); return; }
+    if (!window.confirm(`${pairs.length} etkinliğin bütün sorularına "${BULK_AUDIO_SLOTS[ixAudioSlot]}" olarak sesler eklenecek:\n\n${pairs.map(a => `${a[2]}  ←  ${ixMulti.files[ixMulti.map[a[0]]].name}`).join('\n')}\n\nDevam edilsin mi?`)) return;
+    setIsSaving(true);
+    const urlOf = new Map();
+    const report = [];
+    try {
+      for (const a of pairs) {
+        const fi = ixMulti.map[a[0]];
+        setIxBusy(`${a[2]} yükleniyor...`);
+        if (!urlOf.has(fi)) {
+          const file = ixMulti.files[fi];
+          const sRef = storageRefOf(storage, `uploads/audios/${Date.now()}_${file.name}`);
+          const gain = await measureGain(file);
+          await uploadBytes(sRef, file, { cacheControl: 'public,max-age=31536000' });
+          urlOf.set(fi, withGain(await getDownloadURL(sRef), gain));
+        }
+        const n = await applyAudioToAct(a, ixAudioSlot, urlOf.get(fi));
+        report.push(`${a[2]}: ${n ? `${n} soru` : 'kayıtlı soru yok'}`);
+      }
+      setIxMulti(null);
+      alert(`sesler yerleştirildi:\n\n${report.join('\n')}`);
+    } catch (e) {
+      console.error('toplu ses yerleştirme hatası', e);
+      alert(`bir hata oluştu. tamamlananlar:\n${report.join('\n') || '-'}`);
+    } finally { setIsSaving(false); setIxBusy(''); }
+  };
   const ttsTextOf = (q) => speechTextOf(q);
 
   // Robot kuralları için kök klasörler: seçili olup üst klasörü seçili olmayanlar
@@ -1361,6 +1818,8 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
       alert("Lütfen aşağıdaki klasör ağacından en az 1 klasör (veya soru) kutucuğunu işaretleyin.");
       return;
     }
+    const robotFolderChoice = await askSaveFolder('robotun oluşturacağı testler hangi klasöre kaydedilsin?');
+    if (robotFolderChoice === undefined) return;
 
     const qPerTest = Math.max(1, Number(robotQuestionsPerTest) || 10);
     const numTests = Math.max(1, Number(robotTestCount) || 1);
@@ -1527,7 +1986,8 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
         generatedTestsPayload.push({
           name: numTests === 1 && startNo === 1 ? prefix : `${prefix} ${startNo + tIdx}`,
           questionIds: chosenIdsForThisTest,
-          isPublished: robotPublishImmediately
+          isPublished: robotPublishImmediately,
+          channel: testChannelTab
         });
       }
       if (quotaShortfall) console.warn("bazı klasörlerde kota kadar soru bulunamadı; eksikler diğer klasörlerden tamamlandı.");
@@ -1552,6 +2012,8 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
           name: tp.name,
           questionIds: tp.questionIds,
           isPublished: tp.isPublished,
+          channel: tp.channel || testChannelTab,
+          folderId: robotFolderChoice || null,
           order: idx,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
@@ -1593,15 +2055,16 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
 
   // --- ZAMANLI YAYIN AYARLARI ---
   useEffect(() => {
-    if (tab !== 'test_archive' || scheduleLoaded) return;
+    if (tab !== 'test_archive' || scheduleLoaded === schedDoc) return;
     (async () => {
       try {
-        const snap = await getDocFromServer(getScheduleRef(db, appId));
+        setSchedule(DEFAULT_SCHEDULE); setScheduleDirty(false);
+        const snap = await getDocFromServer(getScheduleRef(db, appId, schedDoc));
         if (snap.exists()) setSchedule({ ...DEFAULT_SCHEDULE, ...snap.data() });
       } catch (e) { console.error("zamanlı yayın ayarı okunamadı", e); }
-      setScheduleLoaded(true);
+      setScheduleLoaded(schedDoc);
     })();
-  }, [tab, scheduleLoaded]);
+  }, [tab, scheduleLoaded, schedDoc]);
 
   const updateSchedule = (patch) => { setSchedule(prev => ({ ...prev, ...patch })); setScheduleDirty(true); };
 
@@ -1613,7 +2076,7 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
     next.perDay = Math.max(1, Math.min(20, Number(next.perDay) || 1));
     setIsSaving(true);
     try {
-      await setDoc(getScheduleRef(db, appId), next);
+      await setDoc(getScheduleRef(db, appId, schedDoc), next);
       setSchedule(next);
       setScheduleDirty(false);
     } catch (e) {
@@ -1679,6 +2142,8 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
               await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tests', editingT), d);
               setTests(prev => prev.map(t => t.id === editingT ? { ...t, ...d, id: editingT } : t));
           } else {
+              const chosenFolder = await askSaveFolder('bu test hangi klasöre kaydedilsin?');
+              if (chosenFolder === undefined) { setIsSaving(false); return; }
               const batch = writeBatch(db);
               let updatedTests = [...tests];
               updatedTests = updatedTests.map(t => {
@@ -1687,7 +2152,7 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
                   return { ...t, order: newOrder };
               });
               const newTestRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'tests'));
-              const newTestData = { ...d, order: 0, createdAt: serverTimestamp() };
+              const newTestData = { ...d, channel: testChannelTab, order: 0, folderId: chosenFolder || null, createdAt: serverTimestamp() };
               batch.set(newTestRef, newTestData);
               await batch.commit();
 
@@ -1703,9 +2168,55 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
 
   const toggleTestStatus = async (test) => {
     try {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tests', test.id), { isPublished: !test.isPublished });
-      setTests(prev => prev.map(t => t.id === test.id ? { ...t, isPublished: !test.isPublished } : t));
+      const next = !test.isPublished;
+      const data = next ? { isPublished: true, publishedAt: new Date().toISOString() } : { isPublished: false };
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tests', test.id), data);
+      setTests(prev => prev.map(t => t.id === test.id ? { ...t, ...data } : t));
+      bumpSync();
     } catch(e) {}
+  };
+
+  // --- TOPLU YAYINLA / YAYINDAN KALDIR ---
+  // Çocuk uygulamalarının yeni testi hemen görmesi için "sync" damgası güncellenir.
+  const bumpSync = async () => {
+    try { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'sync'), { lastUpdate: serverTimestamp() }); } catch (_) {}
+  };
+
+  const setPublishForIds = async (ids, publish, label) => {
+    const list = tests.filter(t => ids.includes(t.id) && !!t.isPublished !== publish);
+    if (list.length === 0) { alert(publish ? 'seçilenlerin hepsi zaten yayında.' : 'seçilenlerin hepsi zaten yayında değil.'); return; }
+    const empty = publish ? list.filter(t => !(t.questionIds || []).length).length : 0;
+    const msg = publish
+      ? `${list.length} test YAYINLANSIN mı? (çocuklar hemen görecek)${empty ? `\n\nuyarı: ${empty} testin içinde hiç soru yok, onlar çocukta görünmez.` : ''}`
+      : `${list.length} test YAYINDAN KALDIRILSIN mı? (çocuklar artık göremez; çözülmüş cevaplar ve yıldızlar silinmez)`;
+    if (!window.confirm(`${label}\n\n${msg}`)) return;
+    setIsSaving(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const data = publish ? { isPublished: true, publishedAt: nowIso } : { isPublished: false };
+      await commitOpsInChunks(db, list.map(t => ({ type: 'update', ref: doc(db, 'artifacts', appId, 'public', 'data', 'tests', t.id), data })));
+      const idset = new Set(list.map(t => t.id));
+      setTests(prev => prev.map(t => idset.has(t.id) ? { ...t, ...data } : t));
+      await bumpSync();
+    } catch (e) { console.error(e); alert('testler güncellenemedi: ' + (e?.message || e)); }
+    setIsSaving(false);
+  };
+
+  const setSelectedPublish = (publish) => {
+    if (selectedTestIds.length === 0) return;
+    setPublishForIds(selectedTestIds, publish, `${selectedTestIds.length} seçili test`);
+  };
+
+  // Klasörün (ve istenirse alt klasörlerinin) içindeki testler — sadece açık olan kanal
+  const folderTestIds = (folderId, withSub) => {
+    const set = new Set(withSub ? tfDescendants(folderId) : [folderId]);
+    return tests.filter(t => chanOf(t) === testChannelTab && set.has(testFolderOf(t))).map(t => t.id);
+  };
+
+  const setFolderPublish = (folder, publish) => {
+    const ids = folderTestIds(folder.id, testFilterWithSub);
+    if (ids.length === 0) { alert('bu klasörde (bu sekmede) test yok.'); return; }
+    setPublishForIds(ids, publish, `📁 ${tfPath(folder.id)}${testFilterWithSub ? ' (alt klasörler dahil)' : ''} · ${ids.length} test`);
   };
 
   const saveStudent = async () => {
@@ -1808,6 +2319,183 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
     finally { setIsSaving(false); }
   };
 
+  // ==========================================================================
+  // --- TEST KLASÖRLERİ (iç içe: üst / alt klasör) + TOPLU TEST SİLME / TAŞIMA ---
+  // ==========================================================================
+  // Klasörler yalnızca yönetici ekranında düzen içindir; öğrenci uygulamasını etkilemez.
+  // Kayıt: settings/test_folder_structure → { list: [{ id, name, parentId }] }
+  const testFolderRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'test_folder_structure');
+  const [testFolders, setTestFolders] = useState([]);
+  const [testFolderFilter, setTestFolderFilter] = useState('all'); // 'all' | 'none' | klasör id
+  const [testFilterWithSub, setTestFilterWithSub] = useState(true);
+  const [selectedTestIds, setSelectedTestIds] = useState([]);
+  const [testFoldersLoaded, setTestFoldersLoaded] = useState(false);
+  useEffect(() => {
+    if (!['tests', 'test_archive'].includes(tab) || testFoldersLoaded) return;
+    (async () => {
+      try { const snap = await getDocFromServer(testFolderRef); setTestFolders(snap.exists() ? (snap.data().list || []) : []); }
+      catch (e) { console.error('test klasörleri okunamadı', e); }
+      setTestFoldersLoaded(true);
+    })();
+  }, [tab]);
+  const saveTestFolders = async (list) => { setTestFolders(list); await setDoc(testFolderRef, { list }); };
+
+  // --- ağaç yardımcıları ---
+  const tfIds = new Set(testFolders.map(f => f.id));
+  const tfParent = (f) => (f.parentId && tfIds.has(f.parentId) ? f.parentId : null);
+  const tfChildren = (pid) => testFolders.filter(f => tfParent(f) === (pid || null)).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  const tfDescendants = (id) => { const out = [id]; const q = [id]; while (q.length) { const c = q.shift(); tfChildren(c).forEach(ch => { out.push(ch.id); q.push(ch.id); }); } return out; };
+  const tfPath = (id) => { const out = []; let c = testFolders.find(f => f.id === id); const seen = new Set(); while (c && !seen.has(c.id)) { seen.add(c.id); out.unshift(c.name); c = testFolders.find(f => f.id === tfParent(c)); } return out.join(' › '); };
+  const tfOrdered = (() => { const out = []; const walk = (pid, lvl) => tfChildren(pid).forEach(f => { out.push({ ...f, level: lvl }); walk(f.id, lvl + 1); }); walk(null, 0); return out; })();
+  // test kaydedilirken "hangi klasöre?" sorusu (klasör yoksa sormaz). iptal -> undefined, klasörsüz -> null
+  const [folderAsk, setFolderAsk] = useState(null);
+  const askSaveFolder = (title) => new Promise(resolve => {
+    if (!tfOrdered.length) { resolve(null); return; }
+    setFolderAsk({ title, resolve, value: (testFolderFilter !== 'all' && testFolderFilter !== 'none') ? testFolderFilter : '' });
+  });
+  const closeFolderAsk = (v) => { if (folderAsk) folderAsk.resolve(v); setFolderAsk(null); };
+  const testFolderOf = (t) => (t.folderId && tfIds.has(t.folderId) ? t.folderId : null);
+  const testsInFolders = (folderIds, withSub) => {
+    const set = new Set();
+    folderIds.forEach(id => (withSub ? tfDescendants(id) : [id]).forEach(x => set.add(x)));
+    return set;
+  };
+
+  const addTestFolder = async (parentId = null) => {
+    const parentName = parentId ? tfPath(parentId) : '';
+    const name = (window.prompt(parentId ? `"${parentName}" içine yeni ALT klasörün adı:` : 'yeni test klasörünün adı (ör. Kavramlar, Sayılar):') || '').trim();
+    if (!name) return;
+    if (testFolders.some(f => (tfParent(f) || null) === (parentId || null) && f.name.toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR'))) { alert('bu yerde aynı adla bir klasör zaten var.'); return; }
+    const f = { id: `tfolder_${Date.now()}`, name, parentId: parentId || null };
+    await saveTestFolders([...testFolders, f]);
+    setTestFolderFilter(f.id);
+  };
+  const renameTestFolder = async (f) => {
+    const name = (window.prompt('klasörün yeni adı:', f.name) || '').trim();
+    if (!name || name === f.name) return;
+    await saveTestFolders(testFolders.map(x => x.id === f.id ? { ...x, name } : x));
+  };
+  const moveTestFolder = async (f, newParentId) => {
+    const np = newParentId || null;
+    if (np && tfDescendants(f.id).includes(np)) { alert('bir klasör kendi alt klasörünün içine taşınamaz.'); return; }
+    await saveTestFolders(testFolders.map(x => x.id === f.id ? { ...x, parentId: np } : x));
+  };
+  const deleteTestFolder = async (f) => {
+    const parent = tfParent(f);
+    const inside = tests.filter(t => t.folderId === f.id);
+    const subs = tfChildren(f.id);
+    if (!window.confirm(`"${f.name}" klasörü silinsin mi?\n\nİçindeki ${inside.length} test SİLİNMEZ${subs.length ? ` ve ${subs.length} alt klasör silinmez` : ''}; ${parent ? `bir üst klasöre ("${tfPath(parent)}")` : '"klasörsüz" bölümüne'} taşınır.`)) return;
+    setIsSaving(true);
+    try {
+      if (inside.length) await commitOpsInChunks(db, inside.map(t => ({ type: 'update', ref: doc(db, 'artifacts', appId, 'public', 'data', 'tests', t.id), data: { folderId: parent } })));
+      setTests(prev => prev.map(t => t.folderId === f.id ? { ...t, folderId: parent } : t));
+      await saveTestFolders(testFolders.filter(x => x.id !== f.id).map(x => x.parentId === f.id ? { ...x, parentId: parent } : x));
+      if (testFolderFilter === f.id) setTestFolderFilter(parent || 'all');
+    } catch (e) { console.error(e); alert('klasör silinemedi.'); }
+    setIsSaving(false);
+  };
+  const moveSelectedTests = async (folderId) => {
+    if (selectedTestIds.length === 0) return;
+    setIsSaving(true);
+    try {
+      await commitOpsInChunks(db, selectedTestIds.map(id => ({ type: 'update', ref: doc(db, 'artifacts', appId, 'public', 'data', 'tests', id), data: { folderId: folderId || null } })));
+      setTests(prev => prev.map(t => selectedTestIds.includes(t.id) ? { ...t, folderId: folderId || null } : t));
+      setSelectedTestIds([]);
+    } catch (e) { console.error(e); alert('testler taşınamadı.'); }
+    setIsSaving(false);
+  };
+  // seçili testleri ödev <-> harita arasında taşı
+  const moveSelectedToChannel = async (target, onlyIds) => {
+    const pickIds = Array.isArray(onlyIds) ? onlyIds : selectedTestIds;
+    if (pickIds.length === 0) return;
+    const label = target === 'gorev' ? 'ÖDEVLERE (sol taraftaki ödev listesi)' : 'HARİTAYA (adalar)';
+    if (!window.confirm(`${pickIds.length} test ${label} taşınsın mı?`)) return;
+    setIsSaving(true);
+    try {
+      const ids = [...pickIds];
+      await commitOpsInChunks(db, ids.map(id => ({ type: 'update', ref: doc(db, 'artifacts', appId, 'public', 'data', 'tests', id), data: { channel: target } })));
+      setTests(prev => prev.map(t => ids.includes(t.id) ? { ...t, channel: target } : t));
+      setSelectedTestIds([]);
+      try { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'sync'), { lastUpdate: serverTimestamp() }); } catch (_) {}
+    } catch (e) { console.error(e); alert('testler taşınamadı.'); }
+    setIsSaving(false);
+  };
+  const deleteSelectedTests = async () => {
+    if (selectedTestIds.length === 0) return;
+    const names = tests.filter(t => selectedTestIds.includes(t.id)).map(t => t.name);
+    const published = tests.filter(t => selectedTestIds.includes(t.id) && t.isPublished).length;
+    if (!window.confirm(`${names.length} test silinecek${published ? ` (${published} tanesi yayında!)` : ''}:\n\n${names.slice(0, 12).join('\n')}${names.length > 12 ? `\n... ve ${names.length - 12} test daha` : ''}\n\nBu işlem geri alınamaz. Testlerin içindeki SORULAR silinmez. Devam edilsin mi?`)) return;
+    setIsSaving(true);
+    try {
+      const ids = [...selectedTestIds];
+      await commitOpsInChunks(db, ids.map(id => ({ type: 'delete', ref: doc(db, 'artifacts', appId, 'public', 'data', 'tests', id) })));
+      if ((schedule.queue || []).some(id => ids.includes(id))) {
+        const next = { ...schedule, queue: (schedule.queue || []).filter(id => !ids.includes(id)) };
+        await setDoc(getScheduleRef(db, appId, schedDoc), next);
+        setSchedule(next);
+      }
+      setTests(prev => prev.filter(t => !ids.includes(t.id)));
+      setSelectedTestIds([]);
+    } catch (e) { console.error('toplu test silme hatası:', e); alert('testler silinirken hata oluştu.'); }
+    setIsSaving(false);
+  };
+
+  // --- ZAMANLI YAYIN: klasörlerden sıraya ekleme ---
+  const [schedFolderSel, setSchedFolderSel] = useState([]); // seçili klasörler ('__none' = klasörsüz)
+  const [schedWithSub, setSchedWithSub] = useState(true);
+  const [schedListFolder, setSchedListFolder] = useState('all');
+  // seçili klasörlerdeki, yayında olmayan ve sırada olmayan testler — klasör ağacı sırasıyla gruplanmış
+  const schedGroupsFor = (folderIds, withSub) => {
+    const queue = schedule.queue || [];
+    const drafts = tests.filter(t => !t.isPublished && !queue.includes(t.id) && chanOf(t) === testChannelTab).sort((a, b) => (a.order || 0) - (b.order || 0));
+    const groups = [];
+    const used = new Set();
+    const wanted = withSub ? testsInFolders(folderIds.filter(x => x !== '__none'), true) : new Set(folderIds.filter(x => x !== '__none'));
+    tfOrdered.forEach(f => {
+      if (!wanted.has(f.id)) return;
+      const list = drafts.filter(t => testFolderOf(t) === f.id && !used.has(t.id));
+      list.forEach(t => used.add(t.id));
+      if (list.length) groups.push({ id: f.id, name: tfPath(f.id), tests: list });
+    });
+    if (folderIds.includes('__none')) {
+      const list = drafts.filter(t => !testFolderOf(t) && !used.has(t.id));
+      if (list.length) groups.push({ id: '__none', name: 'klasörsüz', tests: list });
+    }
+    return groups;
+  };
+  const shuffleArr = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const addFoldersToQueue = (mode) => {
+    if (schedFolderSel.length === 0) { alert('önce soldaki listeden en az bir klasör işaretleyin.'); return; }
+    const groups = schedGroupsFor(schedFolderSel, schedWithSub);
+    const total = groups.reduce((a, g) => a + g.tests.length, 0);
+    if (total === 0) { alert('seçili klasörlerde sıraya eklenecek yayınlanmamış test yok.'); return; }
+    let ids;
+    if (mode === 'random') ids = shuffleArr(groups.flatMap(g => g.tests.map(t => t.id)));
+    else if (mode === 'roundrobin') {
+      const lists = groups.map(g => g.tests.map(t => t.id)); ids = [];
+      for (let i = 0; lists.some(l => i < l.length); i++) lists.forEach(l => { if (i < l.length) ids.push(l[i]); });
+    } else ids = groups.flatMap(g => g.tests.map(t => t.id));
+    const label = mode === 'random' ? 'KARIŞIK (rastgele)' : mode === 'roundrobin' ? 'DÖNÜŞÜMLÜ (her klasörden sırayla birer)' : 'SIRAYLA (klasör klasör, testlerin kendi sırasıyla)';
+    if (!window.confirm(`${groups.length} klasördeki ${total} yayınlanmamış test, yayın sırasının SONUNA ${label} eklensin mi?\n\n${groups.slice(0, 10).map(g => `• ${g.name} (${g.tests.length})`).join('\n')}${groups.length > 10 ? `\n... ve ${groups.length - 10} klasör daha` : ''}\n\nSonra "kaydet"e basmayı unutmayın.`)) return;
+    updateSchedule({ queue: [...(schedule.queue || []), ...ids] });
+    setSchedFolderSel([]);
+  };
+  const shuffleQueue = () => {
+    const q = schedule.queue || [];
+    if (q.length < 2) return;
+    if (!window.confirm(`yayın sırasındaki ${q.length} test karıştırılsın mı?`)) return;
+    updateSchedule({ queue: shuffleArr(q) });
+  };
+
+  // arşivde görünen testler (seçili klasör + istenirse alt klasörleri)
+  const archiveSortedTests = () => [...tests].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const archiveInFilter = (t) => {
+    if (chanOf(t) !== testChannelTab) return false;
+    if (testFolderFilter === 'all') return true;
+    if (testFolderFilter === 'none') return !testFolderOf(t);
+    return testFilterWithSub ? tfDescendants(testFolderFilter).includes(testFolderOf(t)) : testFolderOf(t) === testFolderFilter;
+  };
+
   const confirmDeleteTest = async () => {
     if (!testToDelete) return;
     setIsSaving(true);
@@ -1819,37 +2507,52 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
     finally { setIsSaving(false); }
   };
 
+  // TOPLU SİL: seçili soruları ve klasörleri siler. Binlerce soru da silinebilir
+  // (500'lük parçalar halinde yazılır; tek seferde 500 sınırına takılmaz).
+  // Klasör silinirken içindeki sorular da silinsin mi diye ayrıca sorar.
   const handleBulkDelete = async () => {
       if (selectedPoolQs.length === 0 && selectedFolders.length === 0) return;
-      if (!window.confirm(`seçilen ${selectedPoolQs.length} soru ve ${selectedFolders.length} klasörü silmek istediğinize emin misiniz?`)) return;
       setIsSaving(true);
+      setCopyProgress('silinecek sorular sayılıyor...');
       try {
-          const batch = writeBatch(db);
-          selectedPoolQs.forEach(qId => {
-              batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'questions', qId));
-          });
-          await batch.commit();
-          await removeQuestionIdsFromTests(selectedPoolQs);
-          setQuestions(prev => prev.filter(q => !selectedPoolQs.includes(q.id)));
-          setTSelectedQs(prev => prev.filter(id => !selectedPoolQs.includes(id)));
-
-          let currentFolders = [...folders];
-          for(const fId of selectedFolders) {
-              const qQuery = query(collection(db, 'artifacts', appId, 'public', 'data', 'questions'), where('folderId', '==', fId));
-              const snap = await getDocsFromServer(qQuery);
-              const b = writeBatch(db);
-              snap.docs.forEach(d => {
-                  b.update(d.ref, { folderId: null });
-              });
-              await b.commit();
-              setQuestions(prev => prev.map(q => q.folderId === fId ? { ...q, folderId: null } : q));
-              currentFolders = currentFolders.filter(f => f.id !== fId).map(f => f.parentId === fId ? { ...f, parentId: null } : f);
+          const qCol = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+          const folderSet = new Set(selectedFolders);
+          const inFolders = new Set();
+          for (let i = 0; i < selectedFolders.length; i += 30) {
+              const chunk = selectedFolders.slice(i, i + 30);
+              const snap = await getDocsFromServer(query(qCol, where('folderId', 'in', chunk)));
+              snap.docs.forEach(d => inFolders.add(d.id));
           }
-          await saveFolders(currentFolders);
-
+          setCopyProgress('');
+          const directIds = selectedPoolQs.filter(id => !inFolders.has(id));
+          const msg1 = `DİKKAT: Bu işlem geri alınamaz!\n\n${selectedFolders.length} klasör ve ${selectedPoolQs.length} işaretli soru seçili.${inFolders.size ? `\nSeçili klasörlerin içinde toplam ${inFolders.size} soru var.` : ''}\n\nDevam edilsin mi?`;
+          if (!window.confirm(msg1)) { setIsSaving(false); return; }
+          let deleteFolderQs = false;
+          if (inFolders.size > 0) {
+              deleteFolderQs = window.confirm(`Klasörlerin içindeki ${inFolders.size} soru da SİLİNSİN mi?\n\nTAMAM → klasörler İÇİNDEKİ SORULARLA BİRLİKTE silinir.\nİPTAL → yalnızca klasörler silinir, içindeki sorular havuza (ana dizine) taşınır.`);
+          }
+          const toDelete = deleteFolderQs ? Array.from(new Set([...directIds, ...inFolders, ...selectedPoolQs])) : Array.from(new Set(selectedPoolQs));
+          const toUnfolder = deleteFolderQs ? [] : Array.from(inFolders).filter(id => !toDelete.includes(id));
+          const ops = [
+              ...toDelete.map(id => ({ type: 'delete', ref: doc(qCol, id) })),
+              ...toUnfolder.map(id => ({ type: 'update', ref: doc(qCol, id), data: { folderId: null } }))
+          ];
+          if (ops.length) await commitOpsInChunks(db, ops, { onProgress: (d, t) => setCopyProgress(`siliniyor... ${d}/${t}`) });
+          if (toDelete.length) {
+              setCopyProgress('testlerden çıkarılıyor...');
+              await removeIdsFromAllTests(db, appId, toDelete);
+              setTests(prev => stripIdsFromTestState(prev, toDelete));
+          }
+          const delSet = new Set(toDelete);
+          setQuestions(prev => prev.filter(q => !delSet.has(q.id)).map(q => (q.folderId && folderSet.has(q.folderId)) ? { ...q, folderId: null } : q));
+          setTSelectedQs(prev => prev.filter(id => !delSet.has(id)));
+          const currentFolders = folders.filter(f => !folderSet.has(f.id)).map(f => (f.parentId && folderSet.has(f.parentId)) ? { ...f, parentId: null } : f);
+          if (selectedFolders.length) await saveFolders(currentFolders);
           setSelectedPoolQs([]);
           setSelectedFolders([]);
-      } catch(e) { console.error(e); }
+          setCopyProgress('');
+          alert(`${toDelete.length} soru${selectedFolders.length ? ` ve ${selectedFolders.length} klasör` : ''} silindi.${toUnfolder.length ? `\n${toUnfolder.length} soru havuza taşındı.` : ''}`);
+      } catch(e) { console.error(e); setCopyProgress(''); alert('silme sırasında hata oluştu: ' + (e?.message || '')); }
       setIsSaving(false);
   };
 
@@ -2127,6 +2830,20 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
       setClipboardAction(action);
   };
 
+  // Seçimde hem klasör hem alt klasörleri varsa sadece EN ÜSTTEKİLER taşınır/kopyalanır;
+  // alt klasörler zaten onlarla birlikte gelir (yoksa iç içe yapı düzleşip yan yana dizilir).
+  const topLevelFolderIds = (ids) => {
+    const set = new Set(ids);
+    return ids.filter(id => {
+      let cur = folders.find(f => f.id === id); const seen = new Set();
+      while (cur && cur.parentId && !seen.has(cur.parentId)) {
+        if (set.has(cur.parentId)) return false;
+        seen.add(cur.parentId); cur = folders.find(f => f.id === cur.parentId);
+      }
+      return true;
+    });
+  };
+
   const pasteItems = async (targetFolderId) => {
     if (clipboardQIds.length === 0 && clipboardFolderIds.length === 0) return;
     setIsSaving(true);
@@ -2134,12 +2851,13 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
         const batch = writeBatch(db);
         let newQuestions = [];
         let newFoldersList = [...folders];
+        const rootClipFolders = topLevelFolderIds(clipboardFolderIds);
 
         if (clipboardAction === 'cut') {
             for (const id of clipboardQIds) {
                 batch.update(doc(db, 'artifacts', appId, 'public', 'data', 'questions', id), { folderId: targetFolderId || null });
             }
-            for (const fId of clipboardFolderIds) {
+            for (const fId of rootClipFolders) {
                 if (fId !== targetFolderId && !isDescendant(fId, targetFolderId)) {
                     const folderIndex = newFoldersList.findIndex(f => f.id === fId);
                     if (folderIndex > -1) {
@@ -2202,7 +2920,7 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
                 }
             };
 
-            for (const fId of clipboardFolderIds) {
+            for (const fId of rootClipFolders) {
                 await copyFolderRec(fId, targetFolderId || null);
             }
 
@@ -2281,7 +2999,7 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
           await batch.commit();
 
           let newFoldersList = [...folders];
-          selectedFolders.forEach(fId => {
+          topLevelFolderIds(selectedFolders).forEach(fId => {
               if (fId !== targetFolderId && !isDescendant(fId, targetFolderId)) {
                   const folderIndex = newFoldersList.findIndex(f => f.id === fId);
                   if (folderIndex > -1) {
@@ -2416,6 +3134,34 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
       );
   };
 
+  // --- KLASÖRÜ ÇÖZ: klasördeki (alt klasörler dahil) bütün sorular, ağaçta göründüğü sırayla ---
+  const [folderSolveBusy, setFolderSolveBusy] = useState(null);
+  const solveFolder = async (fId) => {
+    if (!onPreviewLoaded) return;
+    setFolderSolveBusy(fId);
+    try {
+      // ağaçtaki sıra: önce alt klasörler (yukarıdan aşağı), sonra klasörün kendi soruları
+      const order = [];
+      const walk = (id) => { folders.filter(f => (f.parentId || null) === id).forEach(c => walk(c.id)); order.push(id); };
+      walk(fId);
+      const qRef = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
+      const got = new Map();
+      for (let i = 0; i < order.length; i += 30) {
+        const snap = await getDocsFromServer(query(qRef, where('folderId', 'in', order.slice(i, i + 30))));
+        snap.docs.forEach(d => got.set(d.id, { ...d.data(), id: d.id }));
+      }
+      if (got.size === 0) { alert('bu klasörde (alt klasörler dahil) soru yok.'); return; }
+      const sec = (q) => q.createdAt?.seconds ?? (q.createdAt?._seconds ?? 0);
+      const cmp = (a, b) => ((a.order ?? 1e12) - (b.order ?? 1e12)) || (sec(a) - sec(b)) || String(a.name || a.text || '').localeCompare(String(b.name || b.text || ''), 'tr', { numeric: true });
+      const ids = order.flatMap(fid => Array.from(got.values()).filter(q => q.folderId === fid).sort(cmp).map(q => q.id));
+      const orderedIds = normalizeStoryOrder(ids, (id) => got.get(id));
+      setQuestions(prev => { const m = new Map(prev.map(q => [q.id, q])); got.forEach((q, id) => m.set(id, q)); return Array.from(m.values()); });
+      const fname = folders.find(f => f.id === fId)?.name || 'klasör';
+      onPreviewLoaded({ id: `__folder_${fId}`, name: `📁 ${fname} (${orderedIds.length} soru)`, questionIds: orderedIds });
+    } catch (e) { console.error('klasör çözme hatası', e); alert('klasörün soruları yüklenemedi.'); }
+    finally { setFolderSolveBusy(null); }
+  };
+
   const renderFolderTree = (parentId, level = 0) => {
       const childFolders = folders.filter(f => (f.parentId || null) === (parentId || null));
       const folderQs = questions.filter(q => (q.folderId || null) === (parentId || null));
@@ -2448,6 +3194,7 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
                               <button disabled={fIdx === 0} onClick={(e) => {e.stopPropagation(); moveFolder(f.id, -1)}} title="yukarı taşı" className="p-1 hover:bg-slate-100 rounded text-slate-500 disabled:opacity-25 disabled:cursor-not-allowed"><ChevronUp size={14}/></button>
                               <button disabled={fIdx === childFolders.length - 1} onClick={(e) => {e.stopPropagation(); moveFolder(f.id, 1)}} title="aşağı taşı" className="p-1 hover:bg-slate-100 rounded text-slate-500 disabled:opacity-25 disabled:cursor-not-allowed"><ChevronDown size={14}/></button>
                               {folders.filter(x => x.parentId === f.id).length > 1 && <button onClick={(e) => {e.stopPropagation(); sortFoldersAlphabetically(f.id)}} title="alt klasörleri A→Z sırala" className="px-1 py-0.5 hover:bg-slate-100 rounded text-slate-500 text-[9px] font-black">A→Z</button>}
+                              {onPreviewLoaded && <button onClick={(e) => {e.stopPropagation(); solveFolder(f.id)}} disabled={folderSolveBusy === f.id} title="bu klasördeki bütün soruları (alt klasörler dahil) yukarıdan aşağı sırayla çöz" className="px-1.5 py-1 hover:bg-green-50 rounded text-green-600 flex items-center gap-0.5 text-[10px] font-black disabled:opacity-50">{folderSolveBusy === f.id ? <Loader2 size={14} className="animate-spin"/> : <Play size={14} fill="currentColor"/>} çöz</button>}
                               <button onClick={(e) => {e.stopPropagation(); openFolderStyleEditor(f.id)}} title="bu klasördeki tüm soruların görünümünü (boyut, yazı, kutu) toplu ayarla" className="p-1 hover:bg-emerald-50 rounded text-emerald-600"><Palette size={14}/></button>
                               <button onClick={(e) => {e.stopPropagation(); toggleSelectAllInFolder(questions.filter(q => q.folderId === f.id))}} title="içindeki soruları seç" className="p-1 hover:bg-slate-100 rounded text-slate-500"><CheckSquare size={14}/></button>
                               {(clipboardQIds.length > 0 || clipboardFolderIds.length > 0) && <button onClick={(e) => {e.stopPropagation(); pasteItems(f.id)}} title={`buraya ${clipboardAction === 'cut' ? 'taşı' : 'yapıştır'}`} className="p-1 hover:bg-indigo-100 bg-indigo-50 rounded text-indigo-500"><ClipboardPaste size={14}/></button>}
@@ -2568,15 +3315,31 @@ export function AdminView({ childrenList, setChildrenList, questions, setQuestio
       );
   };
 
+  // --- ÖDEV / HARİTA SEKMELERİ (test yayınlarken) ---
+  const chanCount = (c) => tests.filter(t => chanOf(t) === c).length;
+  const channelSwitcher = (
+    <div className="rounded-3xl border-2 border-indigo-100 bg-white p-2 shadow-sm">
+      <div className="grid grid-cols-2 gap-2">
+        {[['gorev', '📋 ÖDEV testleri', 'çocukta haritanın solundaki "ödev" sekmesinde liste olarak görünür (yeni gelince bildirim)', 'from-pink-500 to-fuchsia-600'], ['harita', '🗺️ HARİTA testleri', 'çocukta dünyalarda ada ada görünür', 'from-sky-500 to-indigo-600']].map(([c, label, hint, grad]) => (
+          <button key={c} type="button" onClick={() => { setTestChannelTab(c); setSelectedTestIds([]); setEditingT(null); }} className={`rounded-2xl p-3 text-left transition-all ${testChannelTab === c ? `bg-gradient-to-br ${grad} text-white shadow-lg` : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}>
+            <div className="font-black text-sm">{label} <span className={`ml-1 text-[11px] px-2 py-0.5 rounded-full ${testChannelTab === c ? 'bg-white/25' : 'bg-slate-200'}`}>{chanCount(c)}</span></div>
+            <div className={`text-[10px] font-bold mt-0.5 leading-tight ${testChannelTab === c ? 'text-white/90' : 'text-slate-400'}`}>{hint}</div>
+          </button>
+        ))}
+      </div>
+      <div className="text-[10px] font-bold text-slate-400 mt-1.5 px-1">yeni testler, zamanlı yayın sırası ve arşiv seçili sekmeye göredir. iki sekmenin zamanlı yayını ayrı ayrı ayarlanır (ör. her gün 1 ödev).</div>
+    </div>
+  );
+
 // ============================================================================
 // --- GRUP: YÖNETİCİ PANELİ (ADMIN VIEW) - ARAYÜZ (RENDER/RETURN) ---
 // ============================================================================
 return (
     <div className="pb-20 space-y-6">
        <div className="flex bg-slate-200 p-1 rounded-2xl sticky top-0 z-40 overflow-x-auto">
-        {['questions', 'dot_questions', 'bilsem_questions', ...SUBJECT_TAB_IDS, 'listen_questions', 'tests', 'test_archive', 'students', 'extra', 'stats'].map(id => (
+        {['game', 'game_fx', 'questions', 'dot_questions', 'bilsem_questions', ...SUBJECT_TAB_IDS, 'listen_questions', 'tests', 'test_archive', 'students'].map(id => (
            <button key={id} onClick={() => handleTabClick(id)} className={`flex-1 py-3 px-2 rounded-xl text-xs font-black uppercase transition-all whitespace-nowrap ${tab===id ? 'bg-white text-indigo-600 shadow' : 'text-slate-500'}`}>
-             {id === 'questions' ? 'sorular' : id === 'dot_questions' ? 'etkileşimli sorular' : SUBJECT_TAB_IDS.includes(id) ? SUBJECT_TABS.find(t => t.id === id).label : id === 'bilsem_questions' ? 'bilsem soruları' : id === 'listen_questions' ? 'sesli sorular' : id === 'tests' ? 'yeni test' : id === 'test_archive' ? 'test arşivi' : id === 'students' ? 'öğrenciler' : id === 'stats' ? 'analiz' : 'ekstra'}
+             {id === 'game' ? '🏝️ dünyalar & market' : id === 'game_fx' ? '✨ test sonu & sesler' : id === 'questions' ? 'sorular' : id === 'dot_questions' ? 'etkileşimli sorular' : SUBJECT_TAB_IDS.includes(id) ? SUBJECT_TABS.find(t => t.id === id).label : id === 'bilsem_questions' ? 'bilsem soruları' : id === 'listen_questions' ? 'sesli sorular' : id === 'tests' ? 'yeni test' : id === 'test_archive' ? 'test arşivi' : id === 'students' ? 'öğrenciler' : id === 'stats' ? 'analiz' : 'ekstra'}
           </button>
          ))}
        </div>
@@ -2654,11 +3417,26 @@ return (
          </div>
        )}
 
-       {SUBJECT_TABS.map(st => tab === st.id && (
+       {SUBJECT_TABS.map(st => {
+         if (tab !== st.id) return null;
+         const si = Math.min(subBank[st.id] || 0, (st.banks || [st.bank]).length - 1);
+         const bank = st.banks ? st.banks[si] : st.bank;
+         return (
          <div key={st.id} className="space-y-6 animate-in fade-in">
+           {st.banks && (
+             <div className="flex flex-wrap gap-2 bg-white p-2 rounded-2xl border-2 border-sky-100 shadow-sm">
+               {st.banks.map((b, i) => (
+                 <button key={b.id} type="button" onClick={() => setSubBank(prev => ({ ...prev, [st.id]: i }))}
+                   className={`flex-1 min-w-[120px] px-3 py-2 rounded-xl text-left transition-all ${i === si ? 'bg-sky-600 text-white shadow' : 'bg-slate-50 text-slate-600 hover:bg-sky-50'}`}>
+                   <span className="block text-xs font-black uppercase">{st.subLabel(b, i)}</span>
+                   <span className={`block text-[10px] font-bold ${i === si ? 'text-white/80' : 'text-slate-400'}`}>{st.subSub(b, i)} · {b.countTemplates()} soru</span>
+                 </button>
+               ))}
+             </div>
+           )}
            <TemplateBankPanel
-             key={st.id}
-             bank={st.bank}
+             key={bank.id}
+             bank={bank}
              db={db}
              appId={appId}
              folders={folders}
@@ -2675,10 +3453,12 @@ return (
              setKeepSettingsPinned={setKeepSettingsPinned}
              defaultStyle={defaultStyle}
              setQuestions={setQuestions}
+             setTests={setTests}
            />
            {renderSavedQuestionsSection()}
          </div>
-       ))}
+         );
+       })}
 
        {tab === 'bilsem_questions' && (
          <div className="space-y-6 animate-in fade-in">
@@ -2701,6 +3481,7 @@ return (
              setKeepSettingsPinned={setKeepSettingsPinned}
              defaultStyle={defaultStyle}
              setQuestions={setQuestions}
+             setTests={setTests}
            />
            {renderSavedQuestionsSection()}
          </div>
@@ -2727,6 +3508,7 @@ return (
              setKeepSettingsPinned={setKeepSettingsPinned}
              defaultStyle={defaultStyle}
              setQuestions={setQuestions}
+             setTests={setTests}
            />
            {renderSavedQuestionsSection()}
          </div>
@@ -2741,6 +3523,58 @@ return (
                </h4>
                <button type="button" onClick={() => setTtsDefaultOn(!ttsDefaultOn)} title="Açıkken kaydedilen sorularda yönerge metni (ses yüklenmemişse) telefonun Türkçe sesiyle okunur." className={`ml-auto mr-2 px-3 py-1.5 rounded-xl text-[10px] font-black border ${ttsDefaultOn ? 'bg-orange-500 text-white border-orange-600' : 'bg-white text-slate-500'}`}>🔊 telefonla oku {ttsDefaultOn ? '(açık)' : '(kapalı)'}</button>
                {editingQ && <button onClick={resetQ} className="text-xs text-red-500 font-bold">iptal</button>}
+             </div>
+
+             {/* BÜTÜN ETKİLEŞİMLİ SORULARI TEK SEFERDE KAYDET */}
+             <div className="flex flex-wrap items-center gap-2 bg-rose-50 border-2 border-rose-100 rounded-2xl p-3">
+               <button type="button" disabled={isSaving} onClick={saveAllInteractive} className="px-4 py-2.5 rounded-xl bg-rose-600 text-white text-xs font-black shadow hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1.5">
+                 <Layers size={14} /> etkileşimli soruların tamamını kaydet
+               </button>
+               <span className="text-[10px] font-bold text-rose-800 leading-snug flex-1 min-w-[200px]">15 etkinliğin bütün boyut ve seviyeleri. Klasör seçili değilse "Etkileşimli Sorular › etkinlik › boyut/seviye" klasörlerine yerleşir. Daha önce kaydedilenlerin üzerine yazar (önce sorar).</span>
+               {ixBusy && <span className="text-xs font-black text-rose-700 flex items-center gap-1"><Loader2 size={14} className="animate-spin" /> {ixBusy}</span>}
+             </div>
+
+             {/* ETKİLEŞİMLİ SORULARA TOPLU SES (etkinlik etkinlik) */}
+             <div className="bg-orange-50 border-2 border-orange-100 rounded-2xl p-3 space-y-2">
+               <div className="text-xs font-black text-orange-900 flex items-center gap-1.5"><Music size={14} /> toplu ses · bir etkinliğin bütün sorularına aynı sesi ekle</div>
+               <div className="flex flex-wrap items-center gap-2">
+                 <select value={ixAudioAct} onChange={e => setIxAudioAct(e.target.value)} className="text-xs p-2 rounded-xl border outline-none bg-white font-bold">
+                   {IX_AUDIO_ACTS.map(a => <option key={a[0]} value={a[0]}>{a[2]}</option>)}
+                 </select>
+                 <select value={ixAudioSlot} onChange={e => setIxAudioSlot(e.target.value)} className="text-xs p-2 rounded-xl border outline-none bg-white font-bold">
+                   {Object.entries(BULK_AUDIO_SLOTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                 </select>
+                 <div className="w-48 sm:w-60"><MediaUploader small label="sesi seç / yükle" value={ixAudioUrl} onChange={setIxAudioUrl} type="audio" id="ix-bulk-audio" /></div>
+                 <button type="button" disabled={isSaving || !ixAudioUrl} onClick={() => applyIxAudio(false)} className="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-xs font-black rounded-xl shadow disabled:opacity-40">bütün sorulara ekle</button>
+                 <button type="button" disabled={isSaving} onClick={() => applyIxAudio(true)} className="px-3 py-2 bg-white border border-orange-300 text-orange-700 text-xs font-black rounded-xl hover:bg-orange-100 disabled:opacity-40">sesi kaldır</button>
+               </div>
+               <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-orange-200">
+                 <label className={`px-3 py-2 rounded-xl text-white text-xs font-black shadow cursor-pointer ${isSaving ? 'bg-slate-400 pointer-events-none' : 'bg-gradient-to-r from-orange-500 to-pink-500 hover:opacity-90'}`}>
+                   🎵 toplu ses ekle (bütün sesleri seç)
+                   <input type="file" accept="audio/*" multiple hidden onChange={onPickIxFiles} disabled={isSaving} />
+                 </label>
+                 <span className="text-[10px] font-bold text-orange-800 flex-1 min-w-[200px]">15 sesi birden seçin; her ses dosya adındaki numaraya (1-15) ya da yönerge kelimelerine göre uygun etkinliğe yerleşir. kaydetmeden önce eşleşmeyi görüp değiştirebilirsiniz. ses yeri: yukarıda seçili olan ("{BULK_AUDIO_SLOTS[ixAudioSlot]}").</span>
+               </div>
+               {ixMulti && (
+                 <div className="bg-white border-2 border-orange-200 rounded-2xl p-3 space-y-1.5">
+                   <div className="text-xs font-black text-slate-700">{ixMulti.files.length} ses seçildi · eşleşme:</div>
+                   {IX_AUDIO_ACTS.map(a => (
+                     <div key={a[0]} className="flex flex-wrap items-center gap-2 text-[11px]">
+                       <span className="w-40 font-black text-slate-700 shrink-0">{a[2]}</span>
+                       <span className="text-slate-300">←</span>
+                       <select value={ixMulti.map[a[0]] === '' ? '' : String(ixMulti.map[a[0]])} onChange={e => setIxMulti(m => ({ ...m, map: { ...m.map, [a[0]]: e.target.value === '' ? '' : Number(e.target.value) } }))} className={`flex-1 min-w-[160px] p-1.5 border rounded-lg font-bold outline-none ${ixMulti.map[a[0]] === '' ? 'text-slate-400 bg-slate-50' : 'bg-orange-50 text-orange-900'}`}>
+                         <option value="">— ses yok (dokunma)</option>
+                         {ixMulti.files.map((f, fi) => <option key={fi} value={fi}>{f.name}</option>)}
+                       </select>
+                     </div>
+                   ))}
+                   <div className="flex gap-2 pt-1">
+                     <button type="button" onClick={() => setIxMulti(null)} disabled={isSaving} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-black">vazgeç</button>
+                     <button type="button" onClick={applyIxMulti} disabled={isSaving} className="flex-1 px-4 py-2 rounded-xl bg-orange-600 text-white text-xs font-black shadow disabled:opacity-50">{isSaving ? (ixBusy || 'yükleniyor...') : 'sesleri yerleştir'}</button>
+                   </div>
+                 </div>
+               )}
+               <div className="text-[10px] font-bold text-orange-800 leading-snug">okunacak yönerge: <span className="italic">"{(IX_AUDIO_ACTS.find(a => a[0] === ixAudioAct) || [])[3]}"</span> · sonradan eklenen yeni sorulara ses için bu düğmeye tekrar basın.</div>
              </div>
 
              {/* 14 ETKİLEŞİMLİ ALT SEKME */}
@@ -2839,7 +3673,8 @@ return (
                                correctText: 'dot_grid',
                                correctIndex: 0
                              }),
-                             `${dotRows}x${dotRows} ${DOT_LEVEL_LABELS[dotLevelFilter]} Noktalı Çizim`
+                             `${dotRows}x${dotRows} ${DOT_LEVEL_LABELS[dotLevelFilter]} Noktalı Çizim`,
+                             { setId: 'dot', legacyType: 'dot_grid', keyOf: (tpl) => `dot|${Number(dotRows)}|${(DOT_TEMPLATES[Number(dotRows)] || []).indexOf(tpl)}`, pathOf: (tpl) => ['Noktalı Çizim', `${dotRows}x${dotRows}`, DOT_LEVEL_LABELS[tpl.difficulty] || 'Kolay'] }
                            );
                          }}
                          className="ml-auto px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-black shadow hover:bg-indigo-700"
@@ -2880,7 +3715,8 @@ return (
                                correctText: 'dot_grid',
                                correctIndex: 0
                              }),
-                             `${dotRows}x${dotRows} Noktalı Çizim`
+                             `${dotRows}x${dotRows} Noktalı Çizim`,
+                             { setId: 'dot', legacyType: 'dot_grid', keyOf: (tpl) => `dot|${Number(dotRows)}|${(DOT_TEMPLATES[Number(dotRows)] || []).indexOf(tpl)}`, pathOf: (tpl) => ['Noktalı Çizim', `${dotRows}x${dotRows}`, DOT_LEVEL_LABELS[tpl.difficulty] || 'Kolay'] }
                            )
                          }
                          className="px-3.5 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-black shadow hover:bg-indigo-700 shrink-0"
@@ -2974,8 +3810,9 @@ return (
                                  correctText: 'color_grid',
                                  correctIndex: 0
                                }),
-                               `${boxRows}x${boxCols} Kutu Boyama`
-                             )
+                               `${boxRows}x${boxCols} Kutu Boyama`,
+                             { setId: 'color_box', legacyType: 'color_grid', keyOf: (tpl, idx) => `color_box|${Number(boxRows)}|${idx}`, path: ['Kutu Boyama', `${boxRows}x${boxCols}`] }
+                           )
                            }
                            className="px-3.5 py-1.5 rounded-xl bg-orange-500 text-white text-xs font-black shadow hover:bg-orange-600 shrink-0"
                          >
@@ -3045,8 +3882,9 @@ return (
                      onClick={() => handleBulkGenerateQuestions(
                        getSudokuBank(sudokuSize, sudokuLevel).map((_, i) => getSudokuTpl(sudokuSize, sudokuLevel, i)),
                        sudokuQuestionFromTpl,
-                       `${sudokuSize}x${sudokuSize} Sudoku ${SUDOKU_LEVELS.find(l => l.id === sudokuLevel)?.label}`
-                     )}
+                       `${sudokuSize}x${sudokuSize} Sudoku ${SUDOKU_LEVELS.find(l => l.id === sudokuLevel)?.label}`,
+                             { setId: 'sudoku', legacyType: 'sudoku_grid', keyOf: (t) => `sudoku|${t.size}|${t.level}|${getSudokuBank(t.size, t.level).findIndex(x => x.id === t.id)}`, pathOf: (t) => ['Sudoku', `${t.size}x${t.size}`, SUDOKU_LEVELS.find(l => l.id === t.level)?.label || t.level] }
+                           )}
                      className="px-3.5 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-black shadow hover:bg-emerald-700 disabled:opacity-50">
                      bu seviyenin {getSudokuBank(sudokuSize, sudokuLevel).length} sorusunu kaydet
                    </button>
@@ -3054,8 +3892,9 @@ return (
                      onClick={() => handleBulkGenerateQuestions(
                        SUDOKU_LEVELS.flatMap(l => getSudokuBank(sudokuSize, l.id).map((_, i) => getSudokuTpl(sudokuSize, l.id, i))),
                        (t) => sudokuQuestionFromTpl(t, getSudokuBank(t.size, t.level).findIndex(x => x.id === t.id)),
-                       `${sudokuSize}x${sudokuSize} Sudoku (kolay + orta + zor)`
-                     )}
+                       `${sudokuSize}x${sudokuSize} Sudoku (kolay + orta + zor)`,
+                             { setId: 'sudoku', legacyType: 'sudoku_grid', keyOf: (t) => `sudoku|${t.size}|${t.level}|${getSudokuBank(t.size, t.level).findIndex(x => x.id === t.id)}`, pathOf: (t) => ['Sudoku', `${t.size}x${t.size}`, SUDOKU_LEVELS.find(l => l.id === t.level)?.label || t.level] }
+                           )}
                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-white text-xs font-black shadow hover:bg-slate-900 disabled:opacity-50">
                      {sudokuSize}×{sudokuSize} üç seviye ({SUDOKU_LEVELS.reduce((a, l) => a + getSudokuBank(sudokuSize, l.id).length, 0)} soru)
                    </button>
@@ -3156,8 +3995,9 @@ return (
                              correctIndex: 0
                            };
                          },
-                         `${codingSize}x${codingSize} Kodlama`
-                       )
+                         `${codingSize}x${codingSize} Kodlama`,
+                             { setId: gridSubTab, legacyType: gridSubTab, keyOf: (tpl, idx) => `${gridSubTab}|${codingSize}|${idx}`, path: [gridSubTab === 'line_coding' ? 'Çizgi Kodlama' : 'Kutu Kodlama', `${codingSize}x${codingSize}`] }
+                           )
                      }
                      className="px-4 py-3 rounded-xl bg-purple-600 text-white text-xs font-black shadow hover:bg-purple-700 shrink-0"
                    >
@@ -3269,7 +4109,8 @@ return (
                              correctText: 'color_pattern',
                              correctIndex: 0
                            }),
-                           `${patternType}'li Örüntü`
+                           `${patternType}'li Örüntü`,
+                           { setId: 'color_pattern', legacyType: 'color_pattern', keyOf: (tpl, idx) => `color_pattern|${patternType}|${idx}`, path: ['Renk Örüntüsü', `${patternType}'li`] }
                          )
                        }
                        className="px-3.5 py-1.5 rounded-xl bg-pink-600 text-white text-xs font-black shadow hover:bg-pink-700"
@@ -3306,7 +4147,7 @@ return (
                    />
                  </div>
                </div>
-             )}
+                           )}
 
              {/* 7. SEKME: SİMETRİ ÇALIŞMASI (6x6, 7x7, 8x8 - 200'er Şablon) */}
              {gridSubTab === 'symmetry' && (
@@ -3342,8 +4183,9 @@ return (
                            correctText: 'symmetry_grid',
                            correctIndex: 0
                          }),
-                         `${symmetrySize}x${symmetrySize} Simetri`
-                       )
+                         `${symmetrySize}x${symmetrySize} Simetri`,
+                             { setId: 'symmetry', legacyType: 'symmetry_grid', keyOf: (tpl, idx) => `symmetry|${symmetrySize}|${idx}`, path: ['Simetri', `${symmetrySize}x${symmetrySize}`] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-black shadow hover:bg-rose-700"
                    >
@@ -3401,8 +4243,9 @@ return (
                            correctText: 'matrix_shape',
                            correctIndex: 0
                          }),
-                         "Tablo Oluşturma"
-                       )
+                         "Tablo Oluşturma",
+                             { setId: 'matrix_shape', legacyType: 'matrix_shape', keyOf: (tpl, idx) => `matrix_shape|${idx}`, path: ['Tablo Oluşturma'] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-violet-600 text-white text-xs font-black shadow hover:bg-violet-700"
                    >
@@ -3458,8 +4301,9 @@ return (
                            correctText: 'matrix_paint',
                            correctIndex: 0
                          }),
-                         "Tablo Boyama"
-                       )
+                         "Tablo Boyama",
+                             { setId: 'matrix_paint', legacyType: 'matrix_paint', keyOf: (tpl, idx) => `matrix_paint|${idx}`, path: ['Tablo Boyama'] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-amber-600 text-white text-xs font-black shadow hover:bg-amber-700"
                    >
@@ -3523,8 +4367,9 @@ return (
                              correctIndex: 0
                            };
                          },
-                         `${numberConnectLevel === 'hard' ? 'Zor' : 'Orta'} Sıralı Çizgi`
-                       )
+                         `${numberConnectLevel === 'hard' ? 'Zor' : 'Orta'} Sıralı Çizgi`,
+                             { setId: 'number_connect', legacyType: 'number_connect', keyOf: (tpl, idx) => `number_connect|${numberConnectLevel}|${idx}`, path: ['Sıralı Çizgi', numberConnectLevel === 'hard' ? 'Zor' : 'Orta'] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-cyan-600 text-white text-xs font-black shadow hover:bg-cyan-700"
                    >
@@ -3604,8 +4449,9 @@ return (
                              correctIndex: 0
                            };
                          },
-                         `${mazeLevel === 'easy' ? 'Kolay' : mazeLevel === 'medium' ? 'Orta' : 'Zor'} Labirent`
-                       )
+                         `${mazeLevel === 'easy' ? 'Kolay' : mazeLevel === 'medium' ? 'Orta' : 'Zor'} Labirent`,
+                             { setId: 'maze', legacyType: 'interactive_maze', keyOf: (tpl, idx) => `maze|${mazeLevel}|${idx}`, path: ['Labirent', MAZE_LEVELS[mazeLevel]?.label || 'Kolay'] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-teal-600 text-white text-xs font-black shadow hover:bg-teal-700"
                    >
@@ -3681,8 +4527,9 @@ return (
                            correctText: "",
                            correctIndex: tpl.correctIndex
                          }),
-                         `${({ easy: 'Kolay', medium: 'Orta', hard: 'Zor' })[shadowLevel] || 'Orta'} Gölge Bulma`
-                       )
+                         `${({ easy: 'Kolay', medium: 'Orta', hard: 'Zor' })[shadowLevel] || 'Orta'} Gölge Bulma`,
+                             { setId: 'shadow_quiz', keyOf: (tpl, idx) => `shadow_quiz|${shadowLevel}|${idx}`, path: ['Gölge Bulma', ({ easy: 'Kolay', medium: 'Orta', hard: 'Zor' })[shadowLevel] || 'Orta'] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-white text-xs font-black shadow hover:bg-slate-900"
                    >
@@ -3772,8 +4619,9 @@ return (
                            correctText: 'bar_graph',
                            correctIndex: 0
                          }),
-                         `${barGraphLevel === 'easy' ? 'Kolay' : barGraphLevel === 'medium' ? 'Orta' : 'Zor'} Grafik Oluşturma`
-                       )
+                         `${barGraphLevel === 'easy' ? 'Kolay' : barGraphLevel === 'medium' ? 'Orta' : 'Zor'} Grafik Oluşturma`,
+                             { setId: 'bar_graph', legacyType: 'bar_graph', keyOf: (tpl, idx) => `bar_graph|${barGraphLevel}|${idx}`, path: ['Grafik Oluşturma', barGraphLevel === 'easy' ? 'Kolay' : barGraphLevel === 'medium' ? 'Orta' : 'Zor'] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-black shadow hover:bg-sky-700"
                    >
@@ -3865,8 +4713,9 @@ return (
                              correctIndex: 0
                            };
                          },
-                         `${seqCount} Kare ${SEQUENCE_LEVELS[seqLevel].label} Sırayı Takip Et`
-                       )
+                         `${seqCount} Kare ${SEQUENCE_LEVELS[seqLevel].label} Sırayı Takip Et`,
+                             { setId: 'sequence_memory', legacyType: 'sequence_memory', keyOf: (tpl, idx) => `sequence_memory|${seqCount}|${seqLevel}|${idx}`, path: ['Sırayı Takip Et', `${seqCount} Kare`, SEQUENCE_LEVELS[seqLevel].label] }
+                           )
                      }
                      className="px-3.5 py-1.5 rounded-xl bg-fuchsia-600 text-white text-xs font-black shadow hover:bg-fuchsia-700"
                    >
@@ -3932,7 +4781,9 @@ return (
                            correctText: 'event_order',
                            correctIndex: 0
                          };
-                       }, `${EVENT_ORDER_LEVELS[eoLevel].label} Olay Sıralama`)}
+                       }, `${EVENT_ORDER_LEVELS[eoLevel].label} Olay Sıralama`,
+                             { setId: 'event_order', legacyType: 'event_order', keyOf: (tpl, idx) => `event_order|${eoLevel}|${idx}`, path: ['Olay Sıralama', EVENT_ORDER_LEVELS[eoLevel].label] }
+                           )}
                        className="px-3.5 py-1.5 rounded-xl bg-lime-600 text-white text-xs font-black shadow hover:bg-lime-700">
                        {eoList.length} Şablonu Soruya Dönüştür
                      </button>
@@ -4007,8 +4858,24 @@ return (
            {renderSavedQuestionsSection()}
          </div>
        )}
+       {folderAsk && createPortal(
+         <div className="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-4" onClick={() => closeFolderAsk(undefined)}>
+           <div className="bg-white rounded-3xl p-5 w-full max-w-sm space-y-3 shadow-2xl" onClick={e => e.stopPropagation()}>
+             <h4 className="font-black text-slate-800 text-base">📁 {folderAsk.title}</h4>
+             <select value={folderAsk.value} onChange={e => setFolderAsk(p => ({ ...p, value: e.target.value }))} className="w-full p-3 border-2 rounded-xl font-bold text-sm outline-none">
+               <option value="">(klasörsüz)</option>
+               {tfOrdered.map(f => <option key={f.id} value={f.id}>{'  '.repeat(f.level)}{f.level > 0 ? '└ ' : ''}{f.name}</option>)}
+             </select>
+             <div className="flex gap-2">
+               <button type="button" onClick={() => closeFolderAsk(undefined)} className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-black text-sm">vazgeç</button>
+               <button type="button" onClick={() => closeFolderAsk(folderAsk.value || null)} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-black text-sm">kaydet</button>
+             </div>
+           </div>
+         </div>, document.body
+       )}
        {tab === 'tests' && (
          <div className="space-y-6">
+             {channelSwitcher}
              <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg space-y-4">
                 <div className="flex flex-wrap justify-between items-center gap-2">
                   <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2"><ListChecks size={18}/> {editingT ? 'testi düzenle' : 'yeni test'}</h4>
@@ -4040,7 +4907,7 @@ return (
                        </p>
                      </div>
                      <span className="bg-amber-200 text-amber-900 px-3 py-1 rounded-full text-xs font-black shrink-0">
-                       {selectedFolders.length} Klasör Seçili
+                       {selectedFolders.length} Klasör Seçili{folderQCountText}
                      </span>
                    </div>
 
@@ -4211,6 +5078,25 @@ return (
                                  <button onClick={handleCopyAllToTestEnvironment} disabled={isSaving} title="tüm soruları ve klasörleri deneme projesine aktar" className="text-[10px] font-bold text-white bg-fuchsia-500 px-2 py-1 rounded flex items-center gap-1 hover:bg-fuchsia-600 shadow-sm disabled:opacity-50"><UploadCloud size={12}/> tümünü deneme projesine aktar</button>
                              </div>
                          </div>
+                         <div className="flex flex-wrap items-center gap-1.5">
+                             <button onClick={toggleSelPanel} className={`text-[10px] font-black px-2.5 py-1 rounded shadow-sm flex items-center gap-1 ${selPanel ? 'bg-amber-500 text-white' : 'bg-amber-100 text-amber-800 hover:bg-amber-200'}`}>⭐ seçimlerim {savedSels && savedSels.length ? `(${savedSels.length})` : ''}</button>
+                             {selPanel && savedSels === null && <Loader2 size={14} className="animate-spin text-amber-500" />}
+                             {selPanel && (savedSels || []).map((sel, i) => {
+                               const live = (sel.folders || []).filter(id => folders.some(f => f.id === id)).length;
+                               return (
+                                 <span key={sel.id} className="inline-flex items-center bg-white border-2 border-amber-200 rounded-full overflow-hidden shadow-sm">
+                                   <button onClick={() => applySel(sel)} title={`${live} klasör${(sel.qs || []).length ? `, ${(sel.qs || []).length} soru` : ''} seçilir`} className="pl-2 pr-1.5 py-0.5 text-[11px] font-black text-amber-900 hover:bg-amber-50"><span className="text-amber-500">{i + 1}.</span> {sel.name} <span className="text-[9px] text-slate-400">· {live} klasör{(sel.qs || []).length ? ` · ${(sel.qs || []).length} soru` : ''}</span></button>
+                                   <button onClick={() => deleteSel(sel)} title="seçimi sil" className="px-1.5 py-0.5 text-[11px] font-black text-slate-300 hover:text-red-500 hover:bg-red-50">✕</button>
+                                 </span>
+                               );
+                             })}
+                         </div>
+                         {selPanel && savedSels !== null && (
+                           <div className="flex flex-wrap items-center gap-1.5 bg-amber-50 border border-amber-200 rounded-lg p-1.5">
+                             <input value={selName} onChange={e => setSelName(e.target.value)} onKeyDown={e => e.key === 'Enter' && saveCurrentSel()} placeholder={`ad verin (boş: seçim ${(savedSels || []).length + 1})`} className="flex-1 min-w-[140px] text-[11px] font-bold p-1.5 rounded border outline-none bg-white" />
+                             <button onClick={saveCurrentSel} className="text-[10px] font-black text-white bg-amber-500 hover:bg-amber-600 px-2.5 py-1.5 rounded shadow-sm">şu anki seçimi kaydet ({selectedFolders.length} klasör{selectedPoolQs.length ? `, ${selectedPoolQs.length} soru` : ''})</button>
+                           </div>
+                         )}
                          {copyProgress && (
                              <div className="bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700 rounded-lg px-3 py-1.5 text-[11px] font-black flex items-center gap-2"><Loader2 size={14} className="animate-spin"/> {copyProgress}</div>
                          )}
@@ -4218,7 +5104,7 @@ return (
                          {(selectedPoolQs.length > 0 || selectedFolders.length > 0) && (
                              <div className="bg-indigo-100 p-3 rounded-xl flex flex-col gap-2.5 animate-in fade-in slide-in-from-1 border border-indigo-200 shadow-sm">
                                  <div className="flex flex-col sm:flex-row justify-between items-center gap-2">
-                                     <span className="text-xs font-black text-indigo-800">{selectedPoolQs.length} Soru, {selectedFolders.length} Klasör Seçili</span>
+                                     <span className="text-xs font-black text-indigo-800">{selectedPoolQs.length} Soru, {selectedFolders.length} Klasör Seçili{folderQCountText ? ` (klasörlerin içinde${folderQCountText.replace(' · ', ' ')})` : ''}</span>
                                      <div className="flex gap-2 flex-wrap items-center justify-end">
                                         <button onClick={() => copyBulkItems('copy')} className="bg-blue-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-blue-600 flex items-center gap-1"><Copy size={12}/> kopyala</button>
                                         <button onClick={() => copyBulkItems('cut')} className="bg-orange-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-orange-600 flex items-center gap-1"><Scissors size={12}/> kes</button>
@@ -4231,7 +5117,6 @@ return (
                                            {orderedFolders.map(f => <option key={f.id} value={f.id}>{f.displayName}</option>)}
                                         </select>
                                         <button onClick={() => handleBulkMove(document.getElementById('bulkFolderSelect').value || null)} className="bg-indigo-600 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-700">taşı</button>
-                                        <button onClick={handleBulkDelete} className="bg-red-500 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-red-600">toplu sil</button>
                                         <button onClick={handleCopyToTestEnvironment} disabled={isSaving} className="bg-fuchsia-600 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-fuchsia-700 disabled:opacity-50">test'e kopyala (sınırsız)</button>
                                      </div>
                                  </div>
@@ -4295,6 +5180,13 @@ return (
                                      <span className="text-[10px] font-black text-violet-900 uppercase ml-2">Şık yazısı:</span>
                                      <button type="button" disabled={isSaving} onClick={() => handleBulkPatchSelection((q) => ((q.options || []).some(o => o && o.text) ? { hideOptionText: false } : null), 'şıkların yazısı ekranda GÖRÜNECEK')} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-black rounded-lg shadow">göster</button>
                                      <button type="button" disabled={isSaving} onClick={() => handleBulkPatchSelection((q) => ((q.options || []).some(o => o && o.text) ? { hideOptionText: true } : null), 'şıkların yazısı ekranda GİZLENECEK (resmi olmayan şık "sesi dinle" düğmesiyle sesli okunur)')} className="px-3 py-1.5 bg-white border border-violet-300 text-violet-700 text-xs font-black rounded-lg">gizle</button>
+                                 </div>
+
+                                 {/* TEHLİKELİ İŞLEM: diğer düğmelerden ayrı */}
+                                 <div className="mt-1 flex flex-wrap items-center gap-2 p-2.5 rounded-lg border-2 border-dashed border-red-300 bg-red-50">
+                                     <span className="text-[10px] font-black text-red-700 uppercase">⚠ tehlikeli işlem:</span>
+                                     <span className="text-[10px] font-bold text-red-600 flex-1 min-w-[180px]">seçili {selectedPoolQs.length} soru ve {selectedFolders.length} klasörü kalıcı olarak siler (önce sorar). binlerce soru da silinebilir.</span>
+                                     <button onClick={handleBulkDelete} disabled={isSaving} className="bg-red-600 text-white px-4 py-1.5 rounded-lg text-xs font-black hover:bg-red-700 disabled:opacity-50 flex items-center gap-1 shadow"><Trash2 size={12}/> seçilenleri sil</button>
                                  </div>
                              </div>
                          )}
@@ -4373,17 +5265,22 @@ return (
 
        {tab === 'test_archive' && (
          <div className="space-y-6 animate-in fade-in">
+             {channelSwitcher}
+             <div className="flex flex-wrap items-center justify-end gap-2 -mt-3">
+               <span className="text-[10px] font-bold text-slate-400">yayınlama zaten çocuklara anında gider; ekranlarında güncel değilse:</span>
+               <button onClick={handleSendToStudents} disabled={isSaving} className="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-xl font-black shadow flex items-center gap-1.5 disabled:opacity-50"><Send size={14}/> testleri çocuklara yeniden gönder</button>
+             </div>
              <div className="space-y-2">
                  {/* ZAMANLI YAYIN PANELİ */}
                  {(() => {
                    const testsById = Object.fromEntries(tests.map(t => [t.id, t]));
                    const queue = (schedule.queue || []).filter(id => testsById[id]);
-                   const draftTests = [...tests].filter(t => !t.isPublished).sort((a, b) => (a.order || 0) - (b.order || 0));
+                   const draftTests = [...tests].filter(t => !t.isPublished && chanOf(t) === testChannelTab).sort((a, b) => (a.order || 0) - (b.order || 0));
                    const upcoming = previewUpcoming({ ...schedule, queue }, testsById, new Date(), 5);
                    return (
                      <div className={`rounded-3xl border-2 p-4 mb-5 space-y-3 ${schedule.enabled ? 'border-emerald-300 bg-emerald-50/60' : 'border-slate-200 bg-white'}`}>
                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                         <h5 className="font-black text-sm text-slate-800 flex items-center gap-2"><CalendarClock size={18} className="text-emerald-600"/> zamanlı yayın (her gün otomatik)</h5>
+                         <h5 className="font-black text-sm text-slate-800 flex items-center gap-2"><CalendarClock size={18} className="text-emerald-600"/> zamanlı yayın (her gün otomatik) · <span className={testChannelTab === 'gorev' ? 'text-pink-600' : 'text-sky-600'}>{testChannelTab === 'gorev' ? '📋 ödevler' : '🗺️ harita'}</span></h5>
                          <label className="flex items-center gap-2 cursor-pointer text-xs font-black">
                            <span className={schedule.enabled ? 'text-emerald-700' : 'text-slate-400'}>{schedule.enabled ? 'AÇIK' : 'KAPALI'}</span>
                            <input type="checkbox" className="sr-only peer" checked={Boolean(schedule.enabled)} onChange={(e) => saveSchedule({ enabled: e.target.checked })} />
@@ -4391,7 +5288,7 @@ return (
                          </label>
                        </div>
 
-                       {!scheduleLoaded ? (
+                       {scheduleLoaded !== schedDoc ? (
                          <div className="text-xs font-bold text-slate-400 flex items-center gap-2"><Loader2 size={14} className="animate-spin"/> ayarlar yükleniyor...</div>
                        ) : (
                          <>
@@ -4419,7 +5316,7 @@ return (
                              <div className="bg-white rounded-2xl border border-slate-200 p-3 space-y-1.5">
                                <div className="text-[11px] font-black text-slate-500 uppercase flex items-center justify-between">
                                  <span>yayın sırası ({queue.length} test)</span>
-                                 {queue.length > 0 && <button type="button" onClick={() => updateSchedule({ queue: [] })} className="text-red-500 underline normal-case">sırayı boşalt</button>}
+                                 {queue.length > 0 && <span className="flex gap-2">{queue.length > 1 && <button type="button" onClick={shuffleQueue} className="text-amber-600 underline normal-case">sırayı karıştır</button>}<button type="button" onClick={() => updateSchedule({ queue: [] })} className="text-red-500 underline normal-case">sırayı boşalt</button></span>}
                                </div>
                                {queue.length === 0 && <div className="text-xs text-slate-400 font-bold py-3 text-center">sağdaki taslak testlerden sıraya ekleyin.</div>}
                                <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1">
@@ -4434,21 +5331,58 @@ return (
                                  ))}
                                </div>
                              </div>
-                             <div className="bg-white rounded-2xl border border-slate-200 p-3 space-y-1.5">
+                             <div className="bg-white rounded-2xl border border-slate-200 p-3 space-y-2">
                                <div className="text-[11px] font-black text-slate-500 uppercase flex items-center justify-between">
-                                 <span>taslak testler</span>
+                                 <span>taslak testler ({draftTests.length})</span>
                                  {draftTests.some(t => !queue.includes(t.id)) && (
                                    <button type="button" onClick={() => updateSchedule({ queue: [...queue, ...draftTests.filter(t => !queue.includes(t.id)).map(t => t.id)] })} className="text-emerald-600 underline normal-case">hepsini sıraya ekle</button>
                                  )}
                                </div>
+                               {/* KLASÖRDEN SIRAYA EKLE */}
+                               <div className="rounded-xl border-2 border-emerald-100 bg-emerald-50/50 p-2 space-y-1.5">
+                                 <div className="text-[10px] font-black text-emerald-800 uppercase flex items-center gap-1"><FolderOpen size={12} /> klasörden sıraya ekle</div>
+                                 <div className="max-h-44 overflow-y-auto custom-scrollbar space-y-0.5 bg-white rounded-lg border border-emerald-100 p-1">
+                                   {tfOrdered.length === 0 && <div className="text-[10px] text-slate-400 font-bold p-2">henüz test klasörü yok. aşağıdaki "test arşivi" bölümünden klasör açıp testleri yerleştirebilirsiniz.</div>}
+                                   {[...tfOrdered, { id: '__none', name: 'klasörsüz', level: 0 }].map(f => {
+                                     const n = schedGroupsFor([f.id], schedWithSub).reduce((a, g) => a + g.tests.length, 0);
+                                     const on = schedFolderSel.includes(f.id);
+                                     return (
+                                       <label key={f.id} style={{ paddingLeft: 4 + f.level * 16 }} className={`flex items-center gap-1.5 pr-1 py-0.5 rounded-md text-[11px] font-bold cursor-pointer ${on ? 'bg-emerald-100 text-emerald-900' : 'text-slate-700 hover:bg-slate-50'} ${n === 0 && !on ? 'opacity-50' : ''}`}>
+                                         <input type="checkbox" className="w-3.5 h-3.5" checked={on} onChange={() => setSchedFolderSel(prev => on ? prev.filter(x => x !== f.id) : [...prev, f.id])} />
+                                         {f.level > 0 && <span className="opacity-50">└</span>}
+                                         <span className="truncate flex-1">{f.name}</span>
+                                         <span className="text-[9px] font-black text-slate-400">{n} taslak</span>
+                                       </label>
+                                     );
+                                   })}
+                                 </div>
+                                 <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600 cursor-pointer">
+                                   <input type="checkbox" className="w-3.5 h-3.5" checked={schedWithSub} onChange={e => setSchedWithSub(e.target.checked)} /> alt klasörleri de dahil et
+                                 </label>
+                                 <div className="flex flex-wrap gap-1">
+                                   <button type="button" onClick={() => addFoldersToQueue('order')} className="flex-1 min-w-[90px] px-2 py-1.5 rounded-lg bg-emerald-600 text-white text-[10px] font-black hover:bg-emerald-700" title="klasör ağacı sırasıyla, her klasörde testlerin kendi sırasıyla">sırayla ekle</button>
+                                   <button type="button" onClick={() => addFoldersToQueue('random')} className="flex-1 min-w-[90px] px-2 py-1.5 rounded-lg bg-amber-500 text-white text-[10px] font-black hover:bg-amber-600" title="seçili klasörlerdeki bütün testler karışık (rastgele) sırayla">karışık (rastgele) ekle</button>
+                                   <button type="button" onClick={() => addFoldersToQueue('roundrobin')} className="flex-1 min-w-[90px] px-2 py-1.5 rounded-lg bg-sky-500 text-white text-[10px] font-black hover:bg-sky-600" title="her klasörden sırayla birer test: A1, B1, C1, A2, B2...">dönüşümlü ekle</button>
+                                 </div>
+                                 <p className="text-[9px] text-slate-500 leading-tight">yalnızca yayınlanmamış ve sırada olmayan testler eklenir. ekledikten sonra yukarıdaki "kaydet"e basın.</p>
+                               </div>
+                               {/* TEK TEK EKLE */}
+                               <select value={schedListFolder} onChange={e => setSchedListFolder(e.target.value)} className="w-full p-1.5 border rounded-lg text-[11px] font-bold outline-none bg-white">
+                                 <option value="all">tek tek ekle: bütün taslaklar</option>
+                                 {tfOrdered.map(f => <option key={f.id} value={f.id}>{'  '.repeat(f.level)}{f.level > 0 ? '└ ' : ''}{f.name}</option>)}
+                                 <option value="none">klasörsüz</option>
+                               </select>
                                <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1">
                                  {draftTests.length === 0 && <div className="text-xs text-slate-400 font-bold py-3 text-center">yayınlanmamış test yok.</div>}
-                                 {draftTests.map(t => {
+                                 {draftTests.filter(t => schedListFolder === 'all' ? true : schedListFolder === 'none' ? !testFolderOf(t) : tfDescendants(schedListFolder).includes(testFolderOf(t))).map(t => {
                                    const inQ = queue.includes(t.id);
                                    return (
-                                     <button key={t.id} type="button" onClick={() => toggleQueueTest(t.id)} className={`w-full flex items-center gap-2 p-1.5 rounded-lg border text-left ${inQ ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-slate-50 hover:bg-emerald-50 border-slate-200'}`}>
+                                     <button key={t.id} type="button" onClick={() => toggleQueueTest(t.id)} className={`w-full flex items-center gap-2 p-1.5 rounded-lg border text-left ${inQ ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-slate-50 border-slate-100 hover:bg-emerald-50'}`}>
                                        {inQ ? <CheckCircle size={14}/> : <PlusCircle size={14} className="text-emerald-600"/>}
-                                       <span className="flex-1 text-xs font-bold truncate">{t.name}</span>
+                                       <span className="flex-1 min-w-0">
+                                         <span className="block text-xs font-bold truncate">{t.name}</span>
+                                         {testFolderOf(t) && <span className={`block text-[9px] font-bold truncate ${inQ ? 'text-emerald-100' : 'text-indigo-400'}`}>{tfPath(testFolderOf(t))}</span>}
+                                       </span>
                                        <span className={`text-[9px] font-black ${inQ ? 'text-emerald-100' : 'text-slate-400'}`}>{(t.questionIds || []).length} soru</span>
                                      </button>
                                    );
@@ -4479,9 +5413,89 @@ return (
                  })()}
 
                  <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2 mb-4"><History size={18}/> test arşivi</h4>
-             {[...tests].sort((a,b) => (a.order || 0) - (b.order || 0)).map((t, index) => (
+             {(() => {
+               const sortedTests = archiveSortedTests();
+               const visibleTests = sortedTests.filter(archiveInFilter);
+               const allVisibleSelected = visibleTests.length > 0 && visibleTests.every(t => selectedTestIds.includes(t.id));
+               const countIn = (id) => { const set = new Set(tfDescendants(id)); return sortedTests.filter(t => set.has(testFolderOf(t))).length; };
+               const sel = testFolders.find(f => f.id === testFolderFilter);
+               const chip = (id, label, count) => (
+                 <button key={id} type="button" onClick={() => { setTestFolderFilter(id); setSelectedTestIds([]); }} className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all ${testFolderFilter === id ? 'bg-indigo-600 text-white border-indigo-700 shadow' : 'bg-white text-slate-600 hover:bg-indigo-50'}`}>
+                   {label} <span className="opacity-70">({count})</span>
+                 </button>
+               );
+               return (
+                 <div className="space-y-2 mb-3">
+                   {/* KLASÖR AĞACI */}
+                   <div className="p-2 bg-slate-50 rounded-2xl border border-slate-100 space-y-1.5">
+                     <div className="flex flex-wrap items-center gap-1.5">
+                       <FolderOpen size={16} className="text-indigo-400 mx-1" />
+                       {chip('all', 'tümü', sortedTests.length)}
+                       {chip('none', 'klasörsüz', sortedTests.filter(t => !testFolderOf(t)).length)}
+                       <button type="button" onClick={() => addTestFolder(null)} className="px-3 py-1.5 rounded-xl text-[11px] font-black border border-dashed border-indigo-300 text-indigo-600 bg-white hover:bg-indigo-50 flex items-center gap-1"><FolderPlus size={12} /> yeni üst klasör</button>
+                     </div>
+                     {tfOrdered.length > 0 && (
+                       <div className="flex flex-col gap-0.5 max-h-60 overflow-y-auto custom-scrollbar bg-white rounded-xl border border-slate-100 p-1">
+                         {tfOrdered.map(f => (
+                           <button key={f.id} type="button" onClick={() => { setTestFolderFilter(f.id); setSelectedTestIds([]); }} style={{ paddingLeft: 8 + f.level * 18 }} className={`text-left pr-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1.5 ${testFolderFilter === f.id ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-indigo-50'}`}>
+                             {f.level > 0 && <span className="opacity-50">└</span>}
+                             <Folder size={12} className="shrink-0" />
+                             <span className="truncate flex-1">{f.name}</span>
+                             <span className="opacity-70 font-bold">{countIn(f.id)}</span>
+                           </button>
+                         ))}
+                       </div>
+                     )}
+                     {sel && (
+                       <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-200">
+                         <span className="text-[10px] font-black text-indigo-700 truncate max-w-[220px]">seçili: {tfPath(sel.id)}</span>
+                         <button type="button" onClick={() => addTestFolder(sel.id)} className="px-2 py-1 rounded-lg text-[10px] font-black bg-indigo-100 text-indigo-700 hover:bg-indigo-200 flex items-center gap-1"><FolderPlus size={11} /> alt klasör ekle</button>
+                         <button type="button" onClick={() => renameTestFolder(sel)} className="px-2 py-1 rounded-lg text-[10px] font-black bg-white border text-slate-600 hover:bg-slate-100 flex items-center gap-1"><Edit2 size={11} /> adını değiştir</button>
+                         <select value="" onChange={e => { if (e.target.value) moveTestFolder(sel, e.target.value === '__root' ? null : e.target.value); }} className="p-1 border rounded-lg text-[10px] font-bold outline-none bg-white">
+                           <option value="">klasörü taşı...</option>
+                           <option value="__root">(en üste)</option>
+                           {tfOrdered.filter(f => !tfDescendants(sel.id).includes(f.id)).map(f => <option key={f.id} value={f.id}>{'  '.repeat(f.level)}{f.level > 0 ? '└ ' : ''}{f.name}</option>)}
+                         </select>
+                         <button type="button" onClick={() => { const ids = folderTestIds(sel.id, true); if (!ids.length) { alert('bu klasörde (alt klasörler dahil) bu sekmede test yok.'); return; } moveSelectedToChannel(testChannelTab === 'gorev' ? 'harita' : 'gorev', ids); }} disabled={isSaving} className={`px-2 py-1 rounded-lg text-[10px] font-black text-white disabled:opacity-50 flex items-center gap-1 ${testChannelTab === 'gorev' ? 'bg-sky-500 hover:bg-sky-600' : 'bg-pink-500 hover:bg-pink-600'}`} title="klasördeki bütün testleri (alt klasörler dahil) klasör yapısı bozulmadan diğer bölüme taşı">{testChannelTab === 'gorev' ? '🗺️ klasörü haritaya taşı' : '📋 klasörü ödevlere taşı'}</button>
+                         <button type="button" onClick={() => setFolderPublish(sel, true)} disabled={isSaving} className="px-2 py-1 rounded-lg text-[10px] font-black bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><Eye size={11} /> klasörü yayınla</button>
+                         <button type="button" onClick={() => setFolderPublish(sel, false)} disabled={isSaving} className="px-2 py-1 rounded-lg text-[10px] font-black bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1"><EyeOff size={11} /> klasörü yayından kaldır</button>
+                         <button type="button" onClick={() => deleteTestFolder(sel)} className="px-2 py-1 rounded-lg text-[10px] font-black bg-white border border-red-200 text-red-500 hover:bg-red-50 flex items-center gap-1"><Trash2 size={11} /> klasörü sil</button>
+                         <label className="flex items-center gap-1 text-[10px] font-bold text-slate-600 cursor-pointer ml-auto">
+                           <input type="checkbox" className="w-3.5 h-3.5" checked={testFilterWithSub} onChange={e => setTestFilterWithSub(e.target.checked)} /> alt klasörlerdeki testleri de göster
+                         </label>
+                       </div>
+                     )}
+                   </div>
+                   {sel && <p className="text-[10px] font-bold text-indigo-500 px-1">bu klasör seçiliyken "yeni test" sekmesinde oluşturduğunuz testler doğrudan bu klasöre kaydedilir.</p>}
+                   {/* SEÇİM ÇUBUĞU */}
+                   <div className="flex flex-wrap items-center gap-2 px-1">
+                     <label className="flex items-center gap-1.5 text-[11px] font-black text-slate-600 cursor-pointer">
+                       <input type="checkbox" className="w-4 h-4" checked={allVisibleSelected} onChange={e => setSelectedTestIds(e.target.checked ? Array.from(new Set([...selectedTestIds, ...visibleTests.map(t => t.id)])) : selectedTestIds.filter(id => !visibleTests.some(t => t.id === id)))} />
+                       görünenlerin hepsini seç ({visibleTests.length})
+                     </label>
+                     {selectedTestIds.length > 0 && (
+                       <>
+                         <span className="text-[11px] font-black text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg">{selectedTestIds.length} test seçili</span>
+                         <select value="" onChange={e => { if (e.target.value) moveSelectedTests(e.target.value === '__none' ? null : e.target.value); }} disabled={isSaving} className="p-1.5 border-2 rounded-xl text-[11px] font-bold outline-none">
+                           <option value="">klasöre taşı...</option>
+                           {tfOrdered.map(f => <option key={f.id} value={f.id}>{'  '.repeat(f.level)}{f.level > 0 ? '└ ' : ''}{f.name}</option>)}
+                           <option value="__none">(klasörsüz)</option>
+                         </select>
+                         <button type="button" onClick={() => moveSelectedToChannel(testChannelTab === 'gorev' ? 'harita' : 'gorev')} disabled={isSaving} className={`px-3 py-1.5 rounded-xl text-white text-[11px] font-black shadow disabled:opacity-50 ${testChannelTab === 'gorev' ? 'bg-sky-500 hover:bg-sky-600' : 'bg-pink-500 hover:bg-pink-600'}`}>{testChannelTab === 'gorev' ? '🗺️ haritaya taşı' : '📋 ödevlere taşı'}</button>
+                         <button type="button" onClick={() => setSelectedPublish(true)} disabled={isSaving} className="px-3 py-1.5 rounded-xl bg-green-500 text-white text-[11px] font-black shadow hover:bg-green-600 disabled:opacity-50 flex items-center gap-1"><Eye size={12} /> seçilenleri yayınla</button>
+                         <button type="button" onClick={() => setSelectedPublish(false)} disabled={isSaving} className="px-3 py-1.5 rounded-xl bg-amber-500 text-white text-[11px] font-black shadow hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1"><EyeOff size={12} /> seçilenleri yayından kaldır</button>
+                         <button type="button" onClick={deleteSelectedTests} disabled={isSaving} className="px-3 py-1.5 rounded-xl bg-red-500 text-white text-[11px] font-black shadow hover:bg-red-600 disabled:opacity-50 flex items-center gap-1"><Trash2 size={12} /> seçilenleri sil</button>
+                         <button type="button" onClick={() => setSelectedTestIds([])} className="text-[11px] font-bold text-slate-500 hover:text-slate-700">seçimi kaldır</button>
+                       </>
+                     )}
+                   </div>
+                 </div>
+               );
+             })()}
+             {(() => { const sortedTests = archiveSortedTests(); return sortedTests.filter(archiveInFilter).map(t => ({ t, index: sortedTests.indexOf(t) })); })().map(({ t, index }) => (
                 <div key={t.id} draggable onDragStart={(e) => handleDragStart(e, index)} onDragOver={(e) => handleDragOver(e, index)} onDrop={(e) => handleDrop(e, index)} onDragEnd={handleDragEnd} className={`bg-white p-4 rounded-2xl border flex flex-col sm:flex-row justify-between items-center text-left gap-3 cursor-move hover:shadow-md transition-all ${t.isPublished ? 'border-indigo-100' : 'opacity-80 border-slate-200'} ${draggedItemIndex === index ? 'opacity-40' : ''} ${dragOverTestIdx === index && draggedItemIndex !== null && draggedItemIndex !== index ? (draggedItemIndex < index ? 'border-b-4 border-b-indigo-500' : 'border-t-4 border-t-indigo-500') : ''}`}>
                    <div className="flex items-center gap-3 min-w-0 w-full">
+                     <input type="checkbox" className="w-4 h-4 shrink-0 cursor-pointer" checked={selectedTestIds.includes(t.id)} onChange={e => setSelectedTestIds(prev => e.target.checked ? [...prev, t.id] : prev.filter(id => id !== t.id))} onClick={e => e.stopPropagation()} title="seç" />
                      <div className="text-slate-300"><GripVertical size={20}/></div>
 
                      <input
@@ -4498,8 +5512,9 @@ return (
                      />
 
                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-black text-sm shrink-0 border transition-colors ${t.isPublished ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`} title="soru sayısı">{ (t.questionIds || []).length }</div>
+                     <button type="button" onClick={(e) => { e.stopPropagation(); moveSelectedToChannel(testChannelTab === 'gorev' ? 'harita' : 'gorev', [t.id]); }} disabled={isSaving} className={`shrink-0 px-2 py-1.5 rounded-lg text-white text-[10px] font-black shadow disabled:opacity-50 ${testChannelTab === 'gorev' ? 'bg-sky-500 hover:bg-sky-600' : 'bg-pink-500 hover:bg-pink-600'}`} title="bu testi diğer bölüme taşı">{testChannelTab === 'gorev' ? '🗺️ haritaya' : '📋 ödeve'}</button>
                      <div className="min-w-0 flex-1">
-                       <h5 className="font-black text-slate-800 text-xs sm:text-sm truncate">{t.name}</h5>
+                       <h5 className="font-black text-slate-800 text-xs sm:text-sm truncate">{t.name}{testFolderFilter === 'all' && t.folderId && testFolders.some(f => f.id === t.folderId) && <span className="ml-2 align-middle text-[9px] font-black text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded">{tfPath(t.folderId)}</span>}</h5>
                        <div className="flex items-center gap-2">
                           {t.isPublished ? <span className="text-[8px] font-black text-green-500 uppercase tracking-widest flex items-center gap-1"><CheckCircle size={10}/> yayınlandı{t.publishedBySchedule ? ' (zamanlı)' : ''}</span> : <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><CircleSlash size={10}/> taslak</span>}
                           {!t.isPublished && (schedule.queue || []).includes(t.id) && <span className="text-[8px] font-black text-emerald-600 uppercase tracking-widest flex items-center gap-1"><CalendarClock size={10}/> sırada #{(schedule.queue || []).indexOf(t.id) + 1}</span>}
@@ -4526,6 +5541,13 @@ return (
        )}
 
        {tab === 'students' && (
+          <div className="grid grid-cols-3 gap-2 bg-white p-1.5 rounded-2xl border-2 border-indigo-50 shadow-sm">
+            {[['list', '👧 öğrenciler'], ['stars', '⭐ yıldızlar (analiz)'], ['solved', '🗺️ çözülen testler']].map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setStudentsSub(k)} className={`py-2.5 rounded-xl text-xs font-black transition-all ${studentsSub === k ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-50'}`}>{label}</button>
+            ))}
+          </div>
+       )}
+       {tab === 'students' && studentsSub === 'list' && (
           <div className="space-y-6">
               <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg">
                   <div className="flex justify-between items-center mb-4">
@@ -4540,7 +5562,13 @@ return (
                   {editingStudent && <div className="text-[10px] text-orange-500 font-bold text-center">dikkat: numara değiştirilirse, eski test sonuçları yeni numaraya aktarılacaktır.</div>}
               </div>
            </div>
-              <div className="grid gap-2">
+              <button type="button" onClick={() => setStudentsFolderOpen(o => !o)} className="w-full flex items-center gap-3 bg-white p-4 rounded-2xl border-2 border-indigo-100 shadow-sm hover:bg-indigo-50/40 text-left">
+                {studentsFolderOpen ? <FolderOpen size={22} className="text-indigo-500 shrink-0" /> : <Folder size={22} className="text-indigo-500 shrink-0" />}
+                <span className="font-black text-slate-800 flex-1">öğrencilerim</span>
+                <span className="text-xs font-black bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-full">{sortedChildrenList.length} öğrenci</span>
+                <span className="text-slate-400 text-sm font-black">{studentsFolderOpen ? '▲' : '▼'}</span>
+              </button>
+              {studentsFolderOpen && <div className="grid gap-2 pl-3 border-l-4 border-indigo-100">
                {sortedChildrenList.map(c => (
                  <div key={c.id} className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
                     <div className="flex items-center gap-3">
@@ -4549,29 +5577,46 @@ return (
                     </div>
                     <div className="flex items-center gap-3">
                        <span className="text-xs font-black bg-indigo-50 text-indigo-600 px-2 py-1 rounded">{c.childId}</span>
+                       {onViewAsStudent && <button onClick={() => onViewAsStudent(c)} title="bu öğrencinin ekranını gör (hiçbir şey kaydedilmez)" className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-[11px] font-black flex items-center gap-1"><Eye size={14}/> ekranını gör</button>}
                        <button onClick={() => startEditStudent(c)} className="text-slate-400 hover:text-indigo-600"><Edit2 size={16}/></button>
                        <button onClick={() => setStudentToDelete(c)} disabled={isSaving} className="text-red-300 hover:text-red-500 disabled:opacity-50"><Trash2 size={16}/></button>
                     </div>
                  </div>
                 ))}
-            </div>
+            </div>}
           </div>
         )}
 
-        {tab === 'extra' && (
-          <div className="space-y-6 animate-in fade-in">
-             <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg">
-                 <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2 mb-4"><Settings2 size={18}/> genel ayarlar</h4>
-                 <div className="space-y-6">
+        {tab === 'game' && (
+          <div className="space-y-3">
+            {onViewAsStudent && (
+              <div className="bg-gradient-to-br from-indigo-600 to-fuchsia-600 text-white p-4 rounded-3xl shadow-lg flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-black text-base">👁️ öğrenci ekranını gör</div>
+                  <div className="text-[11px] font-bold text-white/85 leading-tight">çocukların gördüğü dünyaları, ödevleri ve marketi kendiniz gezin. verilen cevaplar kaydedilmez, kimsenin yıldızı değişmez.<br />bir öğrencinin kendi ekranını görmek için "öğrenciler" sekmesindeki "ekranını gör" düğmesini kullanın.</div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={() => onViewAsStudent(null)} className="px-4 py-2.5 rounded-2xl bg-white text-indigo-700 text-sm font-black shadow active:scale-95">yayındakileri gör</button>
+                  <button onClick={() => onViewAsStudent(null, { includeUnpublished: true })} className="px-4 py-2.5 rounded-2xl bg-white/20 border-2 border-white/60 text-white text-sm font-black active:scale-95">yayında olmayanlarla birlikte</button>
+                </div>
+              </div>
+            )}
+            {!anaGameCfgLoaded && <div className="text-xs font-bold text-slate-400 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> oyun ayarları yükleniyor...</div>}
+            {anaGameCfgLoaded && <GameAdminPanel
+              db={db} appId={appId}
+              cfg={anaGameCfg} setCfg={setAnaGameCfg}
+              tests={tests} setTests={setTests} fetchAdminTests={fetchAdminTests}
+              childrenList={childrenList} setChildrenList={setChildrenList} fetchAdminChildren={fetchAdminChildren}
+              responses={responses} fetchAdminResponses={fetchAdminResponses}
+              onStartTestMode={null}
+            />}
+          </div>
+        )}
 
-                     <div className="space-y-4 border-b pb-4">
-                        <div className="flex items-center gap-2"><Send size={20} className="text-green-500"/><label className="font-bold text-slate-700">testleri öğrencilere gönder</label></div>
-                        <p className="text-xs text-slate-400">yeni test eklediğinizde öğrencilerin ekranına anında düşmesi için senkronize edin.</p>
-                        <button onClick={handleSendToStudents} disabled={isSaving} className="w-full py-4 bg-green-500 text-white font-black rounded-xl shadow-lg hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2">
-                            {isSaving ? <Loader2 className="animate-spin"/> : <><Send size={20}/> yeni testleri çocuklara gönder</>}
-                        </button>
-                     </div>
-
+        {tab === 'game_fx' && (
+          <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg mb-4">
+             <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2 mb-4"><Volume1 size={18}/> test ve karşılama sesleri</h4>
+             <div className="space-y-6">
                      <div className="space-y-2 border-b pb-4">
                         <div className="flex items-center gap-2"><Volume1 size={20} className="text-orange-500"/><label className="font-bold text-slate-700">karşılama mesajı (ses)</label></div>
                         <p className="text-xs text-slate-400">tüm öğrenciler için "merhaba" ekranında çalacak ortak ses dosyası.</p>
@@ -4618,108 +5663,80 @@ return (
                         </div>
                      </div>
                      <button onClick={saveGlobalSettings} disabled={isSaving} className="w-full py-4 bg-indigo-600 text-white font-black rounded-xl shadow-lg hover:scale-[1.02] active:scale-95 transition-all">{isSaving ? "kaydediliyor..." : "ayarları kaydet"}</button>
-                 </div>
              </div>
           </div>
-         )}
+        )}
+        {tab === 'game_fx' && (
+          anaGameCfgLoaded ? <ExtraStudio db={db} appId={appId} cfg={anaGameCfg} setCfg={setAnaGameCfg} /> : <div className="text-xs font-bold text-slate-400 flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> ayarlar yükleniyor...</div>
+        )}
 
-         {tab === 'stats' && (
+         {tab === 'students' && studentsSub === 'solved' && (
           <div className="space-y-4 animate-in fade-in">
-                 {statsViewMode === 'tests_list' && (
-                     <div className="space-y-6">
-                         <div className="flex justify-between items-center mb-4">
-                            <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2"><BarChart2 size={18}/> analiz paneli</h4>
-                            <button onClick={handleFetchStats} disabled={isSaving} className="text-xs bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow-md hover:bg-indigo-700 flex items-center gap-2 transition-all">
-                                {isSaving ? <Loader2 size={14} className="animate-spin"/> : <><RefreshCw size={14}/> en güncel verileri getir</>}
-                            </button>
-                         </div>
-                        <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg">
-                            <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2 mb-4"><Star size={18}/> öğrenci yıldızları</h4>
-                            <div className="space-y-3 max-h-[40vh] overflow-y-auto custom-scrollbar pr-2">
-                                {sortedChildrenList.map(child => {
-                                  const stars = calculateStudentStars(child, tests, responses);
-                                  return (
-                                     <div key={child.id} className="flex items-center justify-between p-3 border rounded-xl bg-slate-50">
-                                           <div className="flex items-center gap-3">
-                                              {child.photo ? <img src={child.photo} className="w-8 h-8 rounded-full object-cover border"/> : <div className="w-8 h-8 rounded-full bg-white border flex items-center justify-center"><User size={16} className="text-slate-400"/></div>}
-                                              <div>
-                                                 <div className="font-bold text-sm text-slate-800">{child.name}</div>
-                                                 <div className="text-[10px] font-medium text-slate-500">manuel: {child.manualStars || 0} | toplam: {stars}</div>
-                                              </div>
-                                           </div>
-                                           <div className="flex items-center gap-2">
-                                               <button onClick={() => updateStudentManualStars(child, -1)} className="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200"><Minus size={14}/></button>
-                                               <div className="w-8 text-center font-black text-indigo-600">{stars}</div>
-                                               <button onClick={() => updateStudentManualStars(child, 1)} className="p-1.5 bg-green-100 text-green-600 rounded-lg hover:bg-green-200"><Plus size={14}/></button>
-                                           </div>
-                                     </div>
-                                  );
-                                })}
-                            </div>
-                        </div>
+            <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg">
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-2">
+                <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2">🗺️ çözülen testler</h4>
+                <button onClick={refreshChildrenFromServer} disabled={isSaving} className="text-xs bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow-md hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50">
+                  {isSaving ? <Loader2 size={14} className="animate-spin"/> : <><RefreshCw size={14}/> güncelle</>}
+                </button>
+              </div>
+              <p className="text-[11px] font-bold text-slate-400 mb-4">her öğrencinin haritada ve ödevlerde bitirdiği test sayısı. cevaplar okunmaz; sayı öğrencinin kendi kaydından gelir ve öğrenci uygulamayı açtığında güncellenir. silinen testler de sayılmaya devam eder. "—": öğrenci yeni sürümle henüz girmedi.</p>
+              <div className="grid gap-x-4 gap-y-2 items-center text-sm" style={{ gridTemplateColumns: '1fr auto auto auto' }}>
+                <div className="text-[10px] font-black text-slate-400 uppercase">öğrenci</div>
+                <div className="text-[10px] font-black text-slate-400 uppercase text-center">⭐ yıldız</div>
+                <div className="text-[10px] font-black text-sky-600 uppercase text-center">🗺️ harita</div>
+                <div className="text-[10px] font-black text-pink-600 uppercase text-center">📋 ödev</div>
+                {sortedChildrenList.map(child => {
+                  const st = storedStars(child);
+                  const g = child.game || {};
+                  return (
+                    <React.Fragment key={child.id}>
+                      <div className="font-bold text-slate-800 truncate border-t pt-2">{child.name}</div>
+                      <div className="text-center font-black text-indigo-600 border-t pt-2">{st == null ? '—' : st}</div>
+                      <div className="text-center font-black text-sky-600 border-t pt-2">{g.tmap == null ? '—' : g.tmap}</div>
+                      <div className="text-center font-black text-pink-600 border-t pt-2">{g.todev == null ? '—' : g.todev}</div>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+              {sortedChildrenList.length === 0 && <p className="text-center text-slate-400 font-bold text-sm py-4">öğrenci yok.</p>}
+            </div>
+          </div>
+        )}
 
-                         <div className="grid gap-3">
-                           {tests.filter(t => t.isPublished).map(t => {
-                               const stats = getTestAggregateStats(t);
-                               return (
-                                 <div key={t.id} onClick={() => { setStatsSelectedTest(t); setStatsViewMode('test_detail'); }} className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm hover:border-indigo-200 cursor-pointer flex justify-between items-center transition-all active:scale-95">
-                                    <div className="flex items-center gap-4"><div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600"><BarChart2 size={24}/></div><div><h4 className="font-black text-slate-800 text-sm">{t.name}</h4><p className="text-xs font-bold text-slate-400">{stats.solverCount} öğrenci çözdü</p></div></div>
-                                    <div className="text-right"><div className="text-2xl font-black text-indigo-600">%{stats.avgScore}</div><div className="text-[10px] font-bold text-slate-400 uppercase">sınıf başarısı</div></div>
-                                 </div>
-                               );
-                             })}
-                           {tests.filter(t => t.isPublished).length === 0 && <p className="text-center text-slate-400 font-bold">henüz yayınlanmış test yok.</p>}
+         {tab === 'students' && studentsSub === 'stars' && (
+          <div className="space-y-4 animate-in fade-in">
+            <div className="bg-white p-6 rounded-3xl border-2 border-indigo-50 shadow-lg">
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-2">
+                <h4 className="font-black text-indigo-600 uppercase text-xs flex items-center gap-2"><Star size={18}/> öğrenci yıldızları</h4>
+                <button onClick={refreshChildrenFromServer} disabled={isSaving} className="text-xs bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow-md hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50">
+                  {isSaving ? <Loader2 size={14} className="animate-spin"/> : <><RefreshCw size={14}/> güncelle</>}
+                </button>
+              </div>
+              <p className="text-[11px] font-bold text-slate-400 mb-4">çözülen sorular okunmaz; her öğrencinin yıldızı kendi kaydından gelir (öğrenci başına 1 okuma). yıldız, öğrenci uygulamayı açtığında güncellenir. "—" görünen öğrenci yeni sürümle henüz girmemiştir: "hesapla" sadece o öğrencinin cevaplarını bir kez okur.</p>
+              <div className="space-y-2">
+                {sortedChildrenList.map(child => {
+                  const stars = storedStars(child);
+                  return (
+                    <div key={child.id} className="flex items-center justify-between gap-2 p-3 border rounded-xl bg-slate-50">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {child.photo ? <img src={child.photo} className="w-8 h-8 rounded-full object-cover border"/> : <div className="w-8 h-8 rounded-full bg-white border flex items-center justify-center text-slate-400"><User size={16}/></div>}
+                        <div className="min-w-0">
+                          <div className="font-bold text-sm text-slate-800 truncate">{child.name}</div>
+                          <div className="text-[10px] font-medium text-slate-500">manuel: {child.manualStars || 0}</div>
                         </div>
-
-                     </div>
-                  )}
-                  {statsViewMode === 'test_detail' && statsSelectedTest && (
-                     <div className="space-y-6">
-                       <div className="flex items-center gap-2 mb-2"><button onClick={() => setStatsViewMode('tests_list')} className="p-2 bg-white border rounded-full hover:bg-slate-50"><ChevronLeft size={20}/></button><h3 className="font-black text-lg text-slate-800">{statsSelectedTest.name} raporu</h3></div>
-                       <div className="grid grid-cols-3 gap-3">
-                           {(() => { const { topWrong, topEmpty, topCorrect } = getQuestionHighlights(statsSelectedTest); return ( <> <div className="bg-red-50 border-2 border-red-100 p-3 rounded-2xl text-center"><div className="text-[10px] font-black text-red-400 uppercase mb-1">en zor</div><div className="text-3xl font-black text-red-600">{topWrong ? topWrong.index : '-'}</div><div className="text-[9px] font-bold text-red-300">soru numarası</div></div> <div className="bg-yellow-50 border-2 border-yellow-100 p-3 rounded-2xl text-center"><div className="text-[10px] font-black text-yellow-500 uppercase mb-1">en boş</div><div className="text-3xl font-black text-yellow-600">{topEmpty ? topEmpty.index : '-'}</div><div className="text-[9px] font-bold text-yellow-400">soru numarası</div></div> <div className="bg-green-50 border-2 border-green-100 p-3 rounded-2xl text-center"><div className="text-[10px] font-black text-green-500 uppercase mb-1">en kolay</div><div className="text-3xl font-black text-green-600">{topCorrect ? topCorrect.index : '-'}</div><div className="text-[9px] font-bold text-green-400">soru numarası</div></div> </> ); })()}
-                       </div>
-                       <div className="space-y-2">
-                           <h4 className="font-black text-slate-400 text-xs uppercase ml-1">sınıf sıralaması</h4>
-                           {getStudentRankings(statsSelectedTest).map((s, idx) => (
-                               <div key={s.sid} onClick={() => { setStatsSelectedStudent(s); setStatsViewMode('student_detail'); }} className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm cursor-pointer hover:border-indigo-300 transition-all">
-                                  <div className="flex items-center gap-3 overflow-hidden"><div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm ${idx === 0 ? 'bg-yellow-400 text-white' : idx === 1 ? 'bg-slate-300 text-white' : idx === 2 ? 'bg-orange-300 text-white' : 'bg-slate-100 text-slate-500'}`}>{idx + 1}</div><div className="truncate"><div className="font-bold text-slate-800 text-sm truncate">{s.name}</div><div className="flex items-center gap-2 text-[10px] font-bold"><span className="text-green-600">{s.correct} doğru</span><span className="text-slate-300">•</span><span className="text-red-500">{s.wrong} yanlış</span></div></div></div>
-                                  <div className="flex items-center gap-3 shrink-0"><div className="text-center"><div className="text-xs font-black text-indigo-600">{s.attempts}</div><div className="text-[8px] font-bold text-slate-300 uppercase">kez</div></div>{s.hasPerfect ? <CheckCircle2 size={24} className="text-green-500 fill-green-100"/> : <div className="w-6 h-6 rounded-full border-2 border-slate-100"></div>}</div>
-                               </div>
-                           ))}
-                       </div>
-                     </div>
-                  )}
-                  {statsViewMode === 'student_detail' && statsSelectedStudent && (
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <button onClick={() => setStatsViewMode('test_detail')} className="p-2 bg-white border rounded-full hover:bg-slate-50"><ChevronLeft size={20}/></button>
-                          <div className="flex-1">
-                              <h3 className="font-black text-lg text-slate-800">{statsSelectedStudent.name}</h3>
-                              <p className="text-xs font-bold text-slate-400 uppercase">{statsSelectedTest.name}</p>
-                          </div>
-                          <button
-                              onClick={() => deleteStudentTestResponse(statsSelectedStudent.sid, statsSelectedTest.id)}
-                              className="p-2 bg-red-50 text-red-500 rounded-lg border border-red-100 flex items-center gap-2 text-xs font-black"
-                          >
-                              <Trash2 size={16}/> sil
-                          </button>
-                        </div>
-                        <div className="space-y-2 max-h-[70vh] overflow-y-auto custom-scrollbar pr-1">{statsSelectedStudent.firstAttemptData.map((r, i) => { const q = questions.find(qu => qu.id === r.questionId); const isInteractive = Boolean(q && (q.dotGrid || q.colorGrid || q.sudokuGrid || q.codingGrid || q.patternGrid || q.symmetryGrid || q.matrixShapeGrid || q.matrixPaintGrid || q.numberConnectGrid || q.mazeGrid || q.barGraphGrid || q.sequenceGrid)); let statusColor = "bg-red-50 border-red-200 text-red-700"; let statusIcon = <X size={16}/>; if (r.isCorrect) { statusColor = "bg-green-50 border-green-200 text-green-700"; statusIcon = <Check size={16}/>; } else if (r.userChoice && (r.userChoice.includes("boş") || r.userChoice.includes("süre"))) { statusColor = "bg-yellow-50 border-yellow-200 text-yellow-700"; statusIcon = <MinusCircle size={16}/>; } return (
-                          <div
-                            key={i}
-                            onClick={() => onInspect({ index: i, results: statsSelectedStudent.allResults })}
-                            className={`p-3 rounded-xl border-l-4 flex items-center justify-between shadow-sm bg-white cursor-pointer hover:bg-slate-50 transition-colors ${statusColor.replace('bg-', 'border-l-')}`}
-                          >
-                            <div className="flex items-center gap-3 overflow-hidden">
-                              <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center font-bold text-slate-500 text-xs shrink-0">{i + 1}</div>
-                              <div className="truncate"><div className="text-xs font-bold text-slate-800 truncate">{q?.text || q?.name || "görsel soru"}</div><div className="text-[10px] font-medium opacity-80 truncate">cevap: {isInteractive ? (r.isCorrect ? "doğru tamamladı" : "hatalı tamamladı") : r.userChoice}</div></div>
-                            </div>
-                            <div className={`p-1.5 rounded-full ${statusColor}`}>{statusIcon}</div>
-                          </div>
-                        ); })}</div>
                       </div>
-                  )}
+                      <div className="flex items-center gap-2 shrink-0">
+                        {stars == null && <button onClick={() => computeStarsFor(child)} disabled={starBusy === child.id} className="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 text-[11px] font-black hover:bg-amber-200 disabled:opacity-50">{starBusy === child.id ? '...' : 'hesapla'}</button>}
+                        <button onClick={() => updateStudentManualStars(child, -1)} className="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200"><Minus size={14}/></button>
+                        <div className="min-w-[2.5rem] text-center font-black text-indigo-600 flex items-center justify-center gap-0.5"><Star size={14} className="text-yellow-400 fill-yellow-400"/>{stars == null ? '—' : stars}</div>
+                        <button onClick={() => updateStudentManualStars(child, 1)} className="p-1.5 bg-green-100 text-green-600 rounded-lg hover:bg-green-200"><Plus size={14}/></button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {sortedChildrenList.length === 0 && <p className="text-center text-slate-400 font-bold text-sm py-4">öğrenci yok.</p>}
+              </div>
+            </div>
           </div>
         )}
 

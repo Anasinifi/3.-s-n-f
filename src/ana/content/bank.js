@@ -87,6 +87,7 @@ export const createBank = (cfg) => {
         title: `${g.conceptLabel} • ${g.label || g.text} #${i + 1}`,
         text,
         mainImage: to3d(t.mainImage || ''),
+        mainImgName: t.mainImgName || '', // toplu görsel yüklemede soru görselinin adı (kodla da eşleşir)
         options: opts,
         correctIndex,
         tag: t.tag || '',

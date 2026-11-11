@@ -73,12 +73,18 @@ export const FancyAudioPlayer = ({ src, label = "di̇nle", autoPlay = false, onE
   useEffect(() => { if (audioRef.current) audioRef.current.volume = volumeOf(src); }, [src]);
   const [playing, setPlaying] = useState(false);
 
+  // Telefon izin vermezse (dokunmadan ses çalmaz) çocuğun İLK dokunuşunda çalar.
   useEffect(() => {
-    if (autoPlay && audioRef.current) {
-      audioRef.current.play().catch(() => {});
-      setPlaying(true);
-    }
-  }, [autoPlay, src]);
+    if (!autoPlay || !audioRef.current) return undefined;
+    let unhook = null;
+    audioRef.current.play().then(() => setPlaying(true)).catch(() => {
+      const evs = ['pointerdown', 'touchend', 'click', 'keydown'];
+      const go = () => { if (unhook) unhook(); const a = audioRef.current; if (a) a.play().then(() => setPlaying(true)).catch(() => {}); };
+      evs.forEach(ev => window.addEventListener(ev, go, true));
+      unhook = () => { evs.forEach(ev => window.removeEventListener(ev, go, true)); unhook = null; };
+    });
+    return () => { if (unhook) unhook(); };
+  }, [autoPlay, src]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = () => {
     if (!audioRef.current) return;

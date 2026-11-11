@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, query, where, doc, getDocsFromServer, getDocFromServer, setDoc, updateDoc, addDoc, serverTimestamp, getCountFromServer, deleteField } from 'firebase/firestore';
 import { Loader2, PlusCircle, Music, Image as ImageIcon, Save, Layers, RotateCcw, FolderPlus, CheckCircle2 } from 'lucide-react';
 import { CONCEPT_CATEGORIES, CONCEPT_GROUP_INDEX, getConceptTemplates, countConceptTemplates, countConceptGroups } from '../../activities/concepts';
+import { findQuestionsByField, planOverwrite, removeIdsFromAllTests, mergeQuestionState, stripIdsFromTestState } from '../../utils/overwriteSave';
 import { commitOpsInChunks } from '../../utils/firestoreBatch';
 import { MediaUploader } from '../common/MediaUploader';
 
@@ -26,7 +27,7 @@ const ROOT_FOLDER_NAME = 'Kavram Soruları';
 
 export function ConceptQuestionsPanel({
   db, appId, folders, orderedFolders, qFolderId, setQFolderId, qTimeLimit, setQTimeLimit, isMem, setIsMem, memTime, setMemTime,
-  keepSettingsPinned, setKeepSettingsPinned, defaultStyle, setQuestions
+  keepSettingsPinned, setKeepSettingsPinned, defaultStyle, setQuestions, setTests
 }) {
   const [catId, setCatId] = useState(CONCEPT_CATEGORIES[0].id);
   const [conceptId, setConceptId] = useState(CONCEPT_CATEGORIES[0].concepts[0].id);
@@ -130,7 +131,9 @@ export function ConceptQuestionsPanel({
     const map = {};
     keys.forEach(k => {
       const g = CONCEPT_GROUP_INDEX[k];
-      const conId = findOrAdd(g.conceptLabel, rootId);
+      // Kök › Kategori › Kavram › Soru kalıbı (kategori katmanı olmadan kavramlar yan yana diziliyordu)
+      const catId = g.categoryLabel ? findOrAdd(g.categoryLabel, rootId) : rootId;
+      const conId = findOrAdd(g.conceptLabel, catId);
       map[k] = findOrAdd(g.text, conId);
     });
     if (changed) await setDoc(settingsRef('folder_structure'), { list });
@@ -153,50 +156,61 @@ export function ConceptQuestionsPanel({
     try { const s = await getDocFromServer(settingsRef(`concept_media_${key}`)); return s.exists() ? (s.data().images || {}) : {}; } catch (_) { return {}; }
   };
 
-  // --- Tek soruyu kaydet ---
+  // --- Tek soruyu kaydet (daha önce kaydedildiyse üzerine yazılır) ---
   const saveSingle = async () => {
     if (!tpl) return;
     setBusy('tek soru kaydediliyor...');
     try {
+      const existing = (await findQuestionsByField(db, appId, 'conceptGroupKey', [groupKey])).filter(e => Number(e.data.conceptTplIdx) === tplIdx);
+      if (existing.length > 0 && !window.confirm(`"${tpl.title}" daha önce kaydedilmiş.\n\nÜzerine kaydedilsin mi? Eski soru silinip yerine yenisi yazılır (testlerdeki yeri korunur).`)) { setBusy(''); return; }
       const fmap = await ensureFolders([groupKey]);
       const folderId = autoFolder ? fmap[groupKey] : qFolderId;
       const data = { ...buildPayload(groupKey, tpl, tplIdx, media, groupAudio, groupText), ...commonFields(folderId) };
-      const ref = await addDoc(qCol, data);
-      setQuestions(prev => [{ ...data, id: ref.id, createdAt: { seconds: Math.floor(Date.now() / 1000) } }, ...prev]);
+      const plan = planOverwrite(db, appId, [{ matchKey: `${groupKey}|${tplIdx}`, data }], existing, e => `${e.data.conceptGroupKey}|${e.data.conceptTplIdx}`);
+      await commitOpsInChunks(db, plan.ops);
+      const testIds = await removeIdsFromAllTests(db, appId, plan.deletedIds);
+      setQuestions(prev => mergeQuestionState(prev, plan.created, plan.deletedIds));
+      if (setTests && testIds.length) setTests(prev => stripIdsFromTestState(prev, plan.deletedIds));
       refreshCount(groupKey);
-      alert(`"${tpl.title}" kaydedildi.`);
+      alert(existing.length > 0 ? `"${tpl.title}" üzerine kaydedildi.` : `"${tpl.title}" kaydedildi.`);
     } catch (e) { console.error(e); alert('kaydedilirken hata oluştu: ' + (e?.message || '')); }
     setBusy('');
   };
 
-  // --- Bir veya birden çok grubu toplu kaydet ---
-  const saveGroups = async (keys) => {
+  // --- Bir veya birden çok grubu toplu kaydet (daha önce kaydedilenlerin ÜZERİNE yazar) ---
+  const saveGroups = async (keys, label) => {
     const total = keys.reduce((a, k) => a + (CONCEPT_GROUP_INDEX[k]?.count || 0), 0);
-    const already = keys.reduce((a, k) => a + (savedCounts[k] || 0), 0);
-    const target = autoFolder ? `"${ROOT_FOLDER_NAME} › kavram › soru kalıbı" klasörlerine (otomatik)` : `"${(folders || []).find(f => f.id === qFolderId)?.name || 'Havuz (Ana Dizin)'}" klasörüne`;
-    let msg = `${total} kavram sorusu ${target} kaydedilsin mi?\n(${qTimeLimit} sn, ${isMem ? `hafıza ${memTime} sn` : 'daimi göster'})`;
-    if (already > 0) msg += `\n\n⚠️ Bu kalıplardan daha önce ${already} soru kaydedilmiş. Tekrar kaydederseniz kopyalar oluşur.`;
+    const target = autoFolder ? `"${ROOT_FOLDER_NAME} › kategori › kavram › soru kalıbı" klasörlerine (otomatik)` : `"${(folders || []).find(f => f.id === qFolderId)?.name || 'Havuz (Ana Dizin)'}" klasörüne`;
+    setBusy('daha önce kaydedilen sorular kontrol ediliyor...');
+    let existing = [];
+    try { existing = await findQuestionsByField(db, appId, 'conceptGroupKey', keys); }
+    catch (e) { console.error(e); setBusy(''); alert('kayıtlı sorular kontrol edilemedi: ' + (e?.message || '')); return; }
+    setBusy('');
+    let msg = `${label ? `${label}\n\n` : ''}${total} kavram sorusu ${target} kaydedilsin mi?\n(${qTimeLimit} sn, ${isMem ? `hafıza ${memTime} sn` : 'daimi göster'})`;
+    if (existing.length > 0) msg += `\n\n⚠️ DİKKAT: Bunlardan ${existing.length} soru daha önce kaydedilmiş.\nTAMAM derseniz ÜZERİNE kaydedilir: eski sorular silinip yerine yenileri yazılır, klasörleri de yeniden düzenlenir.\nTestlere eklenmiş sorular testteki yerinde kalır.`;
     if (!window.confirm(msg)) return;
     setBusy(`hazırlanıyor... 0/${total}`);
     try {
       const fmap = await ensureFolders(keys);
-      const ops = []; const created = [];
+      const items = [];
       for (const k of keys) {
         const list = getConceptTemplates(k);
         const ov = await loadOverrides(k);
         const audioUrl = conceptSettings.audio?.[k] || '';
         const textOv = conceptSettings.text?.[k] || '';
         list.forEach((t, idx) => {
-          const ref = doc(qCol);
           const data = { ...buildPayload(k, t, idx, ov, audioUrl, textOv), ...commonFields(autoFolder ? fmap[k] : qFolderId) };
-          ops.push({ type: 'set', ref, data });
-          created.push({ ...data, id: ref.id, createdAt: { seconds: Math.floor(Date.now() / 1000) } });
+          items.push({ matchKey: `${k}|${idx}`, data });
         });
       }
-      const res = await commitOpsInChunks(db, ops, { onProgress: (d, t) => setBusy(`kaydediliyor... ${d}/${t}`) });
-      setQuestions(prev => [...created, ...prev]);
-      keys.forEach(k => refreshCount(k));
-      alert(`${res.written} kavram sorusu kaydedildi.${res.skipped.length ? `\n${res.skipped.length} soru boyut sınırı nedeniyle atlandı.` : ''}`);
+      const plan = planOverwrite(db, appId, items, existing, e => `${e.data.conceptGroupKey}|${e.data.conceptTplIdx}`);
+      const res = await commitOpsInChunks(db, plan.ops, { onProgress: (d, t) => setBusy(`kaydediliyor... ${d}/${t}`) });
+      const testIds = await removeIdsFromAllTests(db, appId, plan.deletedIds);
+      setQuestions(prev => mergeQuestionState(prev, plan.created, plan.deletedIds));
+      if (setTests && testIds.length) setTests(prev => stripIdsFromTestState(prev, plan.deletedIds));
+      setSavedCounts(prev => { const n = { ...prev }; keys.forEach(k => { n[k] = getConceptTemplates(k).length; }); return n; });
+      const yeni = plan.created.length - plan.updatedIds.length;
+      alert(`${plan.created.length} kavram sorusu kaydedildi.${plan.updatedIds.length ? `\n${plan.updatedIds.length} soru eskisinin üzerine yazıldı, ${yeni} soru yeni eklendi.` : ''}${plan.deletedIds.length ? `\n${plan.deletedIds.length} fazla kopya silindi.` : ''}${res.skipped.length ? `\n${res.skipped.length} soru boyut sınırı nedeniyle atlandı.` : ''}`);
     } catch (e) { console.error(e); alert('toplu kayıt sırasında hata oluştu: ' + (e?.message || '')); }
     setBusy('');
   };
@@ -395,6 +409,9 @@ export function ConceptQuestionsPanel({
             )}
             <button type="button" disabled={!!busy} onClick={() => saveGroups(category.concepts.flatMap(c => c.groups.map(g => g.key)))} className="flex-1 min-w-[160px] py-3 rounded-2xl bg-emerald-600 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow disabled:opacity-50">
               <CheckCircle2 size={16} /> "{category.label}" kategorisi ({categoryTotal} soru)
+            </button>
+            <button type="button" disabled={!!busy} onClick={() => saveGroups(Object.keys(CONCEPT_GROUP_INDEX), '"Kavram Soruları" sekmesinin TAMAMI')} className="flex-1 min-w-[160px] py-3 rounded-2xl bg-rose-600 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow disabled:opacity-50" title="Bu sekmedeki bütün hazır soruları kaydeder; daha önce kaydedilenlerin üzerine yazar">
+              <Layers size={16} /> sekmenin tamamı ({countConceptTemplates()} soru)
             </button>
           </div>
           {busy && <div className="flex items-center gap-2 text-xs font-black text-indigo-600"><Loader2 size={14} className="animate-spin" /> {busy}</div>}

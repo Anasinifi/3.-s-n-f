@@ -13,7 +13,6 @@ import { getDocsCacheFirst, getDocCacheFirst } from './utils/firebaseCache';
 import { appId } from './constants';
 import { isAdminEmail, ADMIN_LOGIN_EMAIL, pinToPassword } from '../adminConfig';
 import { LoginView } from './components/LoginView';
-import { StudentHome } from './components/StudentHome';
 import { QuizView } from './components/QuizView';
 import { TestResult } from './components/TestResult';
 import { AdminView } from './components/admin/AdminView';
@@ -23,6 +22,12 @@ import { QuestionContentEditorModal } from './components/admin/QuestionContentEd
 import { calculateStudentStars } from './utils/studentStats';
 import { runPublishScheduleIfDue } from './utils/publishScheduler';
 import { commitOpsInChunks } from './utils/firestoreBatch';
+// --- SINIFIM ÖĞRENCİ EKRANI (dünyalar + ödevler): öğrenci uygulamasının aynısı ---
+import { StudentGame } from '../deneme/game/StudentGame';
+import { loadGameConfig, getCachedGameConfig, testChannel } from '../deneme/game/gameConfig';
+import { setFxConfig } from '../deneme/game/fx';
+import { GameCelebration, makeStartInfo, prepareTest, buildCelebration } from '../deneme/game/GameSession';
+import { installLook3D, setLook3D } from '../deneme/game/look3d';
 
 // ============================================================================
 // --- GRUP: ANA UYGULAMA BİLEŞENİ (APP) - STATELER, HOOKLAR VE FONKSİYONLAR ---
@@ -45,6 +50,25 @@ export default function AnaAdminApp() {
   const [loading, setLoading] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [welcomePlayed, setWelcomePlayed] = useState(false);
+
+  // --- ÖĞRENCİ EKRANINI GÖRME (önizleme) ---
+  // Öğrencinin gördüğü ekranın aynısı açılır. Hiçbir şey kaydedilmez:
+  // cevaplar sadece bu cihazda tutulur, öğrencinin yıldızı ve karakteri değişmez.
+  const [previewMode, setPreviewMode] = useState(null); // null | { includeUnpublished, real }
+  const [previewResponses, setPreviewResponses] = useState([]);
+  const [gameConfig, setGameConfig] = useState(() => getCachedGameConfig(appId));
+  const [testStartInfo, setTestStartInfo] = useState(null);
+  const [celebration, setCelebration] = useState(null);
+  const [gorevOpen, setGorevOpen] = useState(false);
+  useEffect(() => { setFxConfig(gameConfig); }, [gameConfig]);
+  useEffect(() => { installLook3D(); }, []);
+  useEffect(() => { setLook3D(gameConfig?.look3d !== false); }, [gameConfig]);
+  useEffect(() => {
+    if (!user) return undefined;
+    let cancelled = false;
+    loadGameConfig(db, appId, { serverFirst: true, kind: 'ana' }).then(c => { if (!cancelled) setGameConfig(c); });
+    return () => { cancelled = true; };
+  }, [user]);
 
   const [defaultStyle, setDefaultStyle] = useState({ qScale: 1, textScale: 1, boxScale: 1, imgScale: 1, qContainerScale: 1, qColor: '#1e293b', optColor: '#334155', optImgScale: 1 });
 
@@ -343,7 +367,7 @@ export default function AnaAdminApp() {
   }, [user, isAdmin, currentChild]);
 
   // --- KLASÖRDEKİ TÜM SORULARA GÖRÜNÜM AYARINI TOPLU UYGULAMA ---
-  const handleBulkApplyStyle = async (folderIds, styleSubset, onProgress) => {
+  const handleBulkApplyStyle = async (folderIds, styleSubset, onProgress, extra = null) => {
     const qCol = collection(db, 'artifacts', appId, 'public', 'data', 'questions');
     const targets = [];
     for (let i = 0; i < folderIds.length; i += 30) {
@@ -354,10 +378,10 @@ export default function AnaAdminApp() {
     if (targets.length === 0) return 0;
     const ops = targets.map(q => {
       const merged = { ...(q.style || {}), ...styleSubset };
-      return { type: 'update', ref: doc(qCol, q.id), data: { style: merged } };
+      return { type: 'update', ref: doc(qCol, q.id), data: { style: merged, ...(extra || {}) } };
     });
     await commitOpsInChunks(db, ops, { onProgress });
-    const byId = new Map(targets.map(q => [q.id, { ...q, style: { ...(q.style || {}), ...styleSubset } }]));
+    const byId = new Map(targets.map(q => [q.id, { ...q, style: { ...(q.style || {}), ...styleSubset }, ...(extra || {}) }]));
     setQuestions(prev => {
       const map = new Map(prev.map(p => [p.id, p]));
       byId.forEach((v, k) => map.set(k, { ...(map.get(k) || {}), ...v }));
@@ -491,6 +515,57 @@ export default function AnaAdminApp() {
     }
   };
 
+  // --- ÖĞRENCİ EKRANINI GÖR ---
+  // child verilirse o öğrencinin ekranı (gerçek yıldızları ve ilerlemesiyle), verilmezse boş bir deneme öğrencisi.
+  const startStudentPreview = async (child, { includeUnpublished = false } = {}) => {
+    await fetchAdminTests();
+    // sadece bu öğrencinin cevapları okunur (bütün sınıfın değil)
+    if (child) {
+      try {
+        const rSnap = await getDocsFromServer(query(collection(db, 'artifacts', appId, 'public', 'data', 'responses'), where('childId', '==', child.childId)));
+        const mine = rSnap.docs.map(d => ({ ...d.data(), id: d.id }));
+        setResponses(prev => [...prev.filter(r => r.childId !== child.childId), ...mine]);
+      } catch (e) { console.error('öğrencinin cevapları okunamadı', e); }
+    }
+    const base = child
+      ? { ...child, isTest: true }
+      : { id: '__admin_test', childId: '__ADMIN_TEST__', name: 'deneme öğrencisi', isTest: true, game: null, manualStars: 0 };
+    setCurrentChild(base);
+    setPreviewResponses([]);
+    setPreviewMode({ includeUnpublished, real: !!child });
+    setCelebration(null); setGorevOpen(false); setActiveTest(null); setTestStartInfo(null);
+    setWelcomePlayed(false);
+    enterFullscreen();
+    setView('studentHome');
+  };
+  const exitStudentPreview = () => {
+    setPreviewMode(null); setCelebration(null); setActiveTest(null); setTestStartInfo(null);
+    setGorevOpen(false); setPreviewResponses([]); setCurrentChild(null);
+    setView('admin');
+  };
+
+  // Önizlemede verilen cevaplar Firestore'a YAZILMAZ, sadece ekranda görünür
+  const studentResponses = previewMode ? [...responses, ...previewResponses] : responses;
+  const studentTests = previewMode?.includeUnpublished ? tests.map(t => ({ ...t, isPublished: true })) : tests;
+
+  const startTest = (t, opts = {}) => {
+    enterFullscreen();
+    setTestStartInfo(makeStartInfo(currentChild, t, studentResponses, gameConfig, opts));
+    setActiveTest({ ...prepareTest(t, currentChild, studentResponses, opts), isPreview: false });
+    setView('quiz');
+  };
+  const finishTestWithCelebration = (res) => {
+    setCelebration({ ...buildCelebration(res, activeTest, testStartInfo, gameConfig), at: Date.now() });
+    setActiveTest(null); setTestStartInfo(null);
+    setView('studentHome');
+  };
+  const reloadAndStart = async (t, opts) => {
+    setCelebration(null);
+    const r = await fetchTestQuestionsOnDemand(t);
+    if (r && r.ok === false) { alert('sorular yüklenemedi, internet bağlantını kontrol et.'); return; }
+    startTest((r && r.test) || t, opts);
+  };
+
   const handleLogout = async () => {
     await signOut(auth);
     setView('login');
@@ -500,14 +575,19 @@ export default function AnaAdminApp() {
     setTestResult(null);
     setInspectData(null);
     setWelcomePlayed(false);
+    setPreviewMode(null);
+    setTestStartInfo(null);
+    setCelebration(null);
+    setGorevOpen(false);
   };
 
-  const saveQuestionStyle = async (questionId, newStyle, saveAsDefault) => {
+  const saveQuestionStyle = async (questionId, newStyle, saveAsDefault, extra = {}) => {
     try {
        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'questions', questionId), {
-         style: newStyle
+         style: newStyle,
+         ...extra
        });
-       setQuestions(prev => prev.map(q => q.id === questionId ? {...q, style: newStyle} : q));
+       setQuestions(prev => prev.map(q => q.id === questionId ? {...q, style: newStyle, ...extra} : q));
 
        if (saveAsDefault) {
          const styleToSave = { ...newStyle };
@@ -554,7 +634,14 @@ export default function AnaAdminApp() {
         </button>
       )}
 
-      {view !== 'login' && !activeTest && !testResult && !inspectData && !previewEditorQuestion && !contentEditorQuestion && (
+      {previewMode && view === 'studentHome' && (
+        <div className="fixed bottom-3 right-3 z-[150001] flex items-center gap-2 bg-amber-400 text-amber-950 rounded-2xl pl-3 pr-2 py-1.5 shadow-2xl border-2 border-white">
+          <span className="text-[11px] font-black leading-tight">öğrenci ekranı · önizleme<br /><span className="font-bold opacity-80">hiçbir şey kaydedilmiyor</span></span>
+          <button onClick={exitStudentPreview} className="px-3 py-1.5 rounded-xl bg-white text-amber-700 text-xs font-black shadow active:scale-95">panele dön</button>
+        </div>
+      )}
+
+      {view !== 'login' && view !== 'studentHome' && !activeTest && !testResult && !inspectData && !previewEditorQuestion && !contentEditorQuestion && (
         <header className="bg-white border-b px-4 py-3 sticky top-0 z-[50] flex justify-between items-center shadow-sm shrink-0 pr-20">
           <div className="flex items-center gap-2">
             <div className={`p-1.5 rounded-xl text-white ${isAdmin ? 'bg-indigo-600' : 'bg-orange-500'}`}>{isAdmin ? <ShieldCheck size={20} /> : <Play size={20} />}</div>
@@ -578,19 +665,27 @@ export default function AnaAdminApp() {
       <main className={`flex-1 w-full mx-auto flex flex-col justify-start ${isFullscreen || view === 'quiz' ? 'p-1.5 max-w-full' : 'p-3 sm:p-6 md:p-8 max-w-4xl'}`}>
         {view === 'login' && <LoginView onLogin={handleLogin} error={loginError} isProcessing={isProcessing} toggleFS={toggleFullscreen} isFS={isFullscreen} />}
 
-        {view === 'studentHome' && (
-         <StudentHome
+        {view === 'studentHome' && currentChild && (
+         <StudentGame
+            db={db}
+            appId={appId}
             child={currentChild}
-            tests={tests}
-            questions={questions}
-            responses={responses}
-            onStartTest={(t, preview) => { enterFullscreen(); setActiveTest({...t, isPreview: preview}); setView('quiz'); }}
-            enterFullscreen={enterFullscreen}
-            onInspect={(data) => setInspectData(data)}
+            setChild={setCurrentChild}
+            tests={studentTests}
+            responses={studentResponses}
+            cfg={gameConfig}
             settings={appSettings}
+            onStartTest={startTest}
+            paused={!!celebration}
+            enterFullscreen={enterFullscreen}
+            fetchQuestionsOnDemand={fetchTestQuestionsOnDemand}
+            onLogout={previewMode ? exitStudentPreview : handleLogout}
             welcomePlayed={welcomePlayed}
             setWelcomePlayed={setWelcomePlayed}
-            fetchQuestionsOnDemand={fetchTestQuestionsOnDemand}
+            gorevOpen={gorevOpen}
+            setGorevOpen={setGorevOpen}
+            testMode={!!previewMode && !previewMode.real}
+            unlockAll={!!previewMode}
          />
         )}
 
@@ -604,21 +699,33 @@ export default function AnaAdminApp() {
               if (activeTest.isPreview) {
                setView('admin');
                setActiveTest(null);
+              } else if (currentChild && testStartInfo) {
+               finishTestWithCelebration(res);
               } else {
                setTestResult(res);
                setView('testResult');
               }
             }}
             saveResponse={(data) => {
-              if (!activeTest.isPreview) {
-                  addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'responses'), data).then(docRef => {
-                      setResponses(prev => [...prev, {...data, id: docRef.id}]);
-                  });
-              }
+              if (activeTest.isPreview) return;
+              // önizleme: cevap Firestore'a yazılmaz, öğrencinin kaydı bozulmaz
+              if (previewMode) { setPreviewResponses(prev => [...prev, { ...data, timestamp: null, id: `pv_${Date.now()}_${prev.length}` }]); return; }
+              addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'responses'), data).then(docRef => {
+                  setResponses(prev => [...prev, {...data, id: docRef.id}]);
+              });
             }}
             isFullscreen={isFullscreen}
             toggleFullscreen={toggleFullscreen}
-            exitQuiz={() => { setActiveTest(null); setView(isAdmin ? 'admin' : 'studentHome'); }}
+            exitQuiz={() => {
+              const exitedTest = activeTest;
+              const wasStudentTest = !activeTest?.isPreview && currentChild;
+              setActiveTest(null); setTestStartInfo(null);
+              setView(isAdmin && !previewMode && !currentChild ? 'admin' : 'studentHome');
+              if (wasStudentTest) {
+                const ch = testChannel(exitedTest, gameConfig);
+                setCelebration({ kind: 'exit', test: exitedTest, at: Date.now(), data: { testName: ch === 'gorev' || gameConfig?.showIslandNames ? exitedTest?.name : '', channel: ch } });
+              }
+            }}
           />
         )}
 
@@ -632,6 +739,7 @@ export default function AnaAdminApp() {
             responses={responses} setResponses={setResponses}
             folders={folders}
             appId={appId}
+            onPreviewLoaded={(t) => { enterFullscreen(); setActiveTest({ ...t, isPreview: true }); setView('quiz'); }}
             onPreview={async (t) => { enterFullscreen(); const r = await fetchTestQuestionsOnDemand(t); if (r && r.ok === false) { alert("bazı sorular yüklenemedi, bağlantıyı kontrol edin."); } setActiveTest({...(r?.test || t), isPreview: true}); setView('quiz'); }}
             db={db}
             onOpenPreviewEditor={(q, list, opts) => { setPreviewBulkFolderId(opts?.bulkFolderId || null); setPreviewEditorQuestion(q); setEditorContextList(list); }}
@@ -652,9 +760,19 @@ export default function AnaAdminApp() {
             fetchAdminResponses={fetchAdminResponses}
             fetchStatsFromServer={fetchStatsFromServer}
             fetchTestQuestionsOnDemand={fetchTestQuestionsOnDemand}
+            onViewAsStudent={startStudentPreview}
          />
         )}
       </main>
+
+      {celebration && currentChild && view === 'studentHome' && (
+        <GameCelebration
+          celebration={celebration} cfg={gameConfig} child={currentChild} settings={appSettings} appKind="ana"
+          onClose={() => setCelebration(null)}
+          onFix={(t, wrongIds) => reloadAndStart(t, { fix: true, wrongIds })}
+          onRetry={(t) => reloadAndStart(t)}
+        />
+      )}
 
       {inspectData && (
        <QuestionModal

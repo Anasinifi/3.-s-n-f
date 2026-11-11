@@ -14,6 +14,7 @@ import { checkMazeAnswer, InteractiveMazePad } from '../activities/maze';
 import { checkBarGraphAnswer, BarGraphActivityPad } from '../activities/barGraph';
 import { checkSequenceAnswer, SequenceMemoryPad } from '../activities/sequenceMemory';
 import { checkEventOrderAnswer, EventOrderPad } from '../activities/eventOrder';
+import { checkMatchAnswer, MatchPairsPad } from '../activities/matchPairs';
 import { speechTextOf } from '../activities/instructions';
 import { TICK_TOCK_SOUND } from '../constants';
 import { makeAudio } from '../utils/audioLevel';
@@ -66,6 +67,7 @@ export function QuizView({ child, test, questions, onComplete, saveResponse, exi
   const [studentBarGraphCols, setStudentBarGraphCols] = useState({});
   const [studentSequence, setStudentSequence] = useState([]);
   const [studentEventOrder, setStudentEventOrder] = useState([]);
+  const [studentMatch, setStudentMatch] = useState({});
   const [storyPlaying, setStoryPlaying] = useState(false); // soru ekranında hikâye tekrar dinleniyor (süre durur)
 
   const audioRef = useRef(null);
@@ -85,7 +87,8 @@ export function QuizView({ child, test, questions, onComplete, saveResponse, exi
   const isBarGraphQuestion = Boolean(q && (q.questionType === 'bar_graph' || q.barGraphGrid));
   const isSequenceQuestion = Boolean(q && (q.questionType === 'sequence_memory' || q.sequenceGrid));
   const isEventOrderQuestion = Boolean(q && (q.questionType === 'event_order' || q.eventOrderGrid));
-  const isInteractiveGridQuestion = isDotQuestion || isColorGridQuestion || isSudokuQuestion || isCodingQuestion || isPatternQuestion || isSymmetryQuestion || isMatrixShapeQuestion || isMatrixPaintQuestion || isNumberConnectQuestion || isMazeQuestion || isBarGraphQuestion || isSequenceQuestion || isEventOrderQuestion;
+  const isMatchQuestion = Boolean(q && (q.questionType === 'match_pairs' || q.matchGrid));
+  const isInteractiveGridQuestion = isMatchQuestion || isDotQuestion || isColorGridQuestion || isSudokuQuestion || isCodingQuestion || isPatternQuestion || isSymmetryQuestion || isMatrixShapeQuestion || isMatrixPaintQuestion || isNumberConnectQuestion || isMazeQuestion || isBarGraphQuestion || isSequenceQuestion || isEventOrderQuestion;
   // Şık sesi: yüklenmiş ses ya da telefonla okunacak şık metni
   // Ekranda yazı: hideText -> soru yazısı gizli • hideOptionText -> şık yazıları gizli (ses/okuma sürer)
   const qTextShown = q && q.hideText === true ? '' : (q?.text || '');
@@ -141,6 +144,7 @@ export function QuizView({ child, test, questions, onComplete, saveResponse, exi
     lockedRef.current = false;
     setStudentSequence([]);
     setStudentEventOrder([]);
+    setStudentMatch({});
     setStoryPlaying(false);
     stopSpeak();
     setStudentDotLines([]);
@@ -379,6 +383,15 @@ export function QuizView({ child, test, questions, onComplete, saveResponse, exi
     playResultSound(isCorrect);
     setFeedback(isCorrect ? 'correct' : 'wrong');
     handleAnswer(JSON.stringify(studentSequence), isCorrect);
+  };
+
+  const handleMatchSubmit = () => {
+    if (!q?.matchGrid || !beginSubmit()) return;
+    stopAllAudio();
+    const isCorrect = checkMatchAnswer(q.matchGrid, studentMatch);
+    playResultSound(isCorrect);
+    setFeedback(isCorrect ? 'correct' : 'wrong');
+    handleAnswer(JSON.stringify(studentMatch), isCorrect);
   };
 
   const handleEventOrderSubmit = () => {
@@ -732,6 +745,11 @@ export function QuizView({ child, test, questions, onComplete, saveResponse, exi
                  <div className="w-full flex-1 flex flex-col items-center justify-center gap-2 p-2 border-2 border-slate-100 rounded-2xl bg-slate-50/50">
                    <BarGraphActivityPad graphData={q.barGraphGrid || {}} studentCols={studentBarGraphCols} onChangeStudentCols={setStudentBarGraphCols} readOnly={locked} title="resimleri say ve kaç tane varsa o kadar kutucuk boya" status={gridStatus} />
                    {renderInteractiveSubmitBar(handleBarGraphSubmit)}
+                 </div>
+               ) : isMatchQuestion ? (
+                 <div className="w-full flex-1 flex flex-col items-center justify-center gap-2 p-2 border-2 border-slate-100 rounded-2xl bg-slate-50/50">
+                   <MatchPairsPad key={`mp-${q.id}-${idx}`} grid={q.matchGrid || {}} options={q.options || []} pairs={studentMatch} onChange={setStudentMatch} readOnly={locked} status={gridStatus} showAnswer={Boolean(feedback && feedback !== 'correct')} hideOptionText={hideOptText} title="soldan bir karta, sonra sağdan eşine dokun" />
+                   {renderInteractiveSubmitBar(handleMatchSubmit)}
                  </div>
                ) : isEventOrderQuestion ? (
                  <div className="w-full flex-1 flex flex-col items-center justify-center gap-2 p-2 border-2 border-slate-100 rounded-2xl bg-slate-50/50">

@@ -18,7 +18,10 @@ const lbl = 'text-[10px] font-black text-slate-500 uppercase';
 const inp = 'w-full p-2 border-2 rounded-xl font-bold outline-none focus:border-indigo-500 text-sm bg-white';
 const btn = 'px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 disabled:opacity-50';
 
-const SYNTH_LABELS = { pop: 'pıt', coin: 'para', chime: 'zil', fanfare: 'fanfar', sparkle: 'pırıltı', boing: 'boing', whoosh: 'vuuş', splash: 'şıpırtı', chop: 'balta', thud: 'gümm', soft: 'yumuşak', sad: 'üzgün' };
+const SYNTH_LABELS = { pop: 'pıt', coin: 'para', chime: 'zil', fanfare: 'fanfar', sparkle: 'pırıltı', boing: 'boing', whoosh: 'vuuş', splash: 'şıpırtı', chop: 'balta', thud: 'gümm', soft: 'yumuşak', sad: 'üzgün',
+  crackle: 'çatırtı', rocketUp: 'roket', cheer: 'yaşasın', welcome: 'hoş geldin',
+  drumroll: 'davul + zil', applause: 'alkış', magic: 'sihir', bubble: 'baloncuk', harp: 'arp', bell: 'çan', trumpet: 'trompet', xylophone: 'ksilofon', levelUp: 'seviye atladı',
+  tada: 'tada!', whistle: 'ıslık', twinkle: 'pırıl pırıl', pianoRun: 'piyano', clap: 'el çırpma', slideUp: 'yükselen', marimba: 'marimba', gong: 'gong' };
 
 export function ExtraStudio({ db, appId, cfg, setCfg }) {
   const [fx, setFx] = useState(() => JSON.parse(JSON.stringify(mergeGameConfig(cfg).fx)));
@@ -55,6 +58,7 @@ export function ExtraStudio({ db, appId, cfg, setCfg }) {
     const r = { perfect: 3, completed: 1 };
     return {
       starsGained: id === 'first_perfect' ? 3 : id === 'retry_perfect' ? 2 : id === 'first_completed' ? 1 : 0,
+      diamondsGained: id === 'first_perfect' ? 3 : id === 'retry_perfect' ? 2 : id === 'first_completed' ? 1 : id === 'map_done' ? 3 : 0,
       reward: r, difficulty: diff, correct: perfect ? 10 : 8, wrong: perfect ? 0 : 2,
       testName: 'Örnek Test', newStatus: perfect ? 'perfect' : 'completed', unlockedNext: id === 'first_completed' || id === 'first_perfect',
     };
@@ -63,13 +67,47 @@ export function ExtraStudio({ db, appId, cfg, setCfg }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-1.5 bg-slate-100 p-1.5 rounded-2xl">
-        {[['events', '🎉 test sonu animasyonları'], ['explain', '⭐ "tam çözersen" açıklaması'], ['sounds', '🔊 oyun sesleri']].map(([id, l]) => (
+        {[['events', '🎉 test sonu animasyonları'], ['sounds', '🔊 oyun sesleri'], ['music', '🎵 fon müziği']].map(([id, l]) => (
           <button key={id} onClick={() => setSec(id)} className={`flex-1 min-w-[150px] py-2 px-2 rounded-xl text-xs font-black ${sec === id ? 'bg-white text-indigo-600 shadow' : 'text-slate-500'}`}>{l}</button>
         ))}
       </div>
 
+      {sec === 'music' && (
+        <div className="space-y-3">
+          <div className={box}>
+            <h4 className="font-black text-indigo-600 text-sm mb-1">🎵 fon müziği</h4>
+            <p className="text-[11px] font-bold text-slate-500">dünyada (harita, market, karakter) ve ödev sayfasında arka planda sürekli çalar. çocuk teste dokunduğu anda durur, haritaya dönünce yeniden başlar. çocuk sol alttaki 🎵 düğmesiyle kapatıp açabilir. müzik yüklemezseniz hiç müzik çalmaz.</p>
+            <p className="text-[11px] font-bold text-emerald-600 mt-1">maliyet: müzik ayarı oyun ayarlarının içinde durur, ek okuma yoktur. müzik dosyası telefonda önbelleğe alınır, her açılışta yeniden indirilmez. kısa (1-2 dk) ve küçük (1-3 MB) mp3 seçin.</p>
+          </div>
+          {[['map', '🗺️ dünya müziği (harita, market, karakter)'], ['gorev', '📋 ödev sayfası müziği (boş: dünya müziği çalar)']].map(([k, label]) => (
+            <div key={k} className={box + ' space-y-2'}>
+              <div className="font-black text-sm text-slate-800">{label}</div>
+              <MediaUploader label="müzik yükle (mp3)" value={fx.music?.[k] || ''} onChange={v => { setFx(f => ({ ...f, music: { ...(f.music || {}), [k]: v } })); setDirty(true); }} id={`fx-music-${k}`} type="audio" small />
+              {fx.music?.[k] && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <audio controls loop src={String(fx.music[k]).split('#')[0]} className="h-9 max-w-full" />
+                  <button onClick={() => { setFx(f => ({ ...f, music: { ...(f.music || {}), [k]: '' } })); setDirty(true); }} className={`${btn} bg-red-50 text-red-500`}>müziği kaldır</button>
+                </div>
+              )}
+            </div>
+          ))}
+          <div className={box}>
+            <div className={lbl}>müzik sesi: %{Math.round((fx.music?.volume ?? 0.35) * 100)}</div>
+            <input type="range" min="0.05" max="1" step="0.05" className="w-full" value={fx.music?.volume ?? 0.35} onChange={e => { const v = Number(e.target.value); setFx(f => ({ ...f, music: { ...(f.music || {}), volume: v } })); setDirty(true); }} />
+            <p className="text-[11px] font-bold text-slate-400">konuşma ve efektler duyulsun diye müziği kısık tutun (önerilen %25-40).</p>
+          </div>
+        </div>
+      )}
+
       {sec === 'events' && (
         <div className="space-y-2">
+          <label className={`${box} !p-3 flex items-center gap-3 cursor-pointer`}>
+            <input type="checkbox" className="w-5 h-5" checked={fx.endTts !== false} onChange={x => { setFx(f => ({ ...f, endTts: x.target.checked })); setDirty(true); }} />
+            <span className="flex-1">
+              <span className="block font-black text-sm text-slate-800">🗣️ telefon sesiyle otomatik okuma {fx.endTts !== false ? '(açık)' : '(kapalı)'}</span>
+              <span className="block text-[11px] font-bold text-slate-400">test sonunda yazıların telefonun sesiyle okunması (ör. "yanlışlarını çöz, yıldızını kap"). kapatınca sadece yazı okunmaz; efekt sesleri, yüklediğiniz sesler ve animasyonlar aynen çalar.</span>
+            </span>
+          </label>
           <p className="text-[11px] font-bold text-slate-500 px-1">her durum için ayrı animasyon ve ses seçin. "efekt sesi" animasyonla birlikte çalar; "konuşma sesi" (ör. kendi sesinizle "aferin!") hemen ardından çalar. resim/gif yüklerseniz animasyonun üstünde görünür.</p>
           {FX_EVENTS.map(e => {
             const ev = full.events[e.id];
@@ -80,7 +118,7 @@ export function ExtraStudio({ db, appId, cfg, setCfg }) {
                   <span className="text-2xl">{e.icon}</span>
                   <div className="flex-1 min-w-0">
                     <div className="font-black text-sm text-slate-800">{e.label}</div>
-                    <div className="text-[11px] font-bold text-slate-400 truncate">{e.hint} · {ANIMATIONS.find(a => a.id === ev.anim)?.label}</div>
+                    <div className="text-[11px] font-bold text-slate-400 truncate">{e.hint} · {ANIMATIONS.find(a => a.id === ev.anim)?.label}{ev.anim2 ? ` + ${ANIMATIONS.find(a => a.id === ev.anim2)?.label || ''}` : ''}</div>
                   </div>
                   <button onClick={(x) => { x.stopPropagation(); setPreview({ kind: e.id, diff: 'easy' }); }} className={`${btn} bg-slate-800 text-white`}>▶ önizle</button>
                   <span className="text-slate-400 font-black">{isOpen ? '▲' : '▼'}</span>
@@ -100,16 +138,32 @@ export function ExtraStudio({ db, appId, cfg, setCfg }) {
                         <button onClick={() => playSound(ev.sound || ev.synth)} className={`${btn} bg-slate-100`}>🔈</button>
                       </div>
                     </div>
+                    <div><div className={lbl}>2. animasyon (üst üste, isteğe bağlı)</div>
+                      <select className={inp} value={ev.anim2 || ''} onChange={x => setEv(e.id, { anim2: x.target.value })}>
+                        <option value="">— yok</option>
+                        {ANIMATIONS.filter(a => a.id !== 'none' && a.id !== ev.anim).map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+                      </select>
+                    </div>
+                    <div><div className={lbl}>2. hazır ses (üst üste, isteğe bağlı)</div>
+                      <div className="flex gap-1">
+                        <select className={inp} value={ev.synth2 || ''} onChange={x => setEv(e.id, { synth2: x.target.value })}>
+                          <option value="">— yok</option>
+                          {SYNTH_NAMES.map(n => <option key={n} value={n}>{SYNTH_LABELS[n] || n}</option>)}
+                        </select>
+                        <button onClick={() => playSound(ev.sound2 || ev.synth2)} className={`${btn} bg-slate-100`}>🔈</button>
+                      </div>
+                    </div>
                     <div><div className={lbl}>başlık</div><input className={inp} value={ev.title || ''} onChange={x => setEv(e.id, { title: x.target.value })} placeholder={DEFAULT_EVENTS[e.id]?.title} /></div>
                     <div><div className={lbl}>mesaj</div><textarea rows={2} className={inp} value={ev.message || ''} onChange={x => setEv(e.id, { message: x.target.value })} placeholder={DEFAULT_EVENTS[e.id]?.message} /></div>
                     <MediaUploader label="efekt sesi (alkış, patlama...)" value={ev.sound || ''} onChange={v => setEv(e.id, { sound: v })} id={`fx-snd-${e.id}`} type="audio" small />
+                    <MediaUploader label="2. efekt sesi (üst üste çalar)" value={ev.sound2 || ''} onChange={v => setEv(e.id, { sound2: v })} id={`fx-snd2-${e.id}`} type="audio" small />
                     <MediaUploader label="konuşma sesi (sizin sesiniz)" value={ev.voice || ''} onChange={v => setEv(e.id, { voice: v })} id={`fx-voice-${e.id}`} type="audio" small />
                     <div className="sm:col-span-2"><MediaUploader label="resim / gif (isteğe bağlı, animasyonun üstünde)" value={ev.image || ''} onChange={v => setEv(e.id, { image: v })} id={`fx-img-${e.id}`} small /></div>
-                    {(e.id === 'first_completed' || e.id === 'retry_completed') && (
+                    {false && (e.id === 'first_completed' || e.id === 'retry_completed') && (
                       <label className="flex items-center gap-2 text-xs font-black text-amber-700 sm:col-span-2"><input type="checkbox" checked={!!ev.showExplain} onChange={x => setEv(e.id, { showExplain: x.target.checked })} /> altında "tam çözersen kaç yıldız olur" açıklaması çıksın</label>
                     )}
                     <div className="sm:col-span-2 flex gap-2 flex-wrap">
-                      {(ev.sound || ev.voice || ev.image) && <button onClick={() => setEv(e.id, { sound: '', voice: '', image: '' })} className={`${btn} bg-red-50 text-red-500`}>yüklenenleri kaldır</button>}
+                      {(ev.sound || ev.sound2 || ev.voice || ev.image) && <button onClick={() => setEv(e.id, { sound: '', sound2: '', voice: '', image: '' })} className={`${btn} bg-red-50 text-red-500`}>yüklenenleri kaldır</button>}
                       <button onClick={() => { setFx(f => { const n = { ...f, events: { ...f.events } }; delete n.events[e.id]; return n; }); setDirty(true); }} className={`${btn} bg-slate-100 text-slate-500`}>varsayılana dön</button>
                     </div>
                   </div>
@@ -152,7 +206,7 @@ export function ExtraStudio({ db, appId, cfg, setCfg }) {
             {GAME_SOUNDS.map(s => (
               <div key={s.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
                 <div className="flex items-center justify-between mb-1">
-                  <div className="text-xs font-black text-slate-700">{s.label}</div>
+                  <div className="text-xs font-black text-slate-700">{s.label}{s.synth === null && <span className="block text-[10px] text-slate-400">hazır ses yok: yüklemezseniz telefonun Türkçe sesi okur</span>}</div>
                   <button onClick={() => playSound(fx.sounds?.[s.id] || s.synth)} className={`${btn} !py-1 bg-white border`}>🔈 dinle</button>
                 </div>
                 <MediaUploader label={`${s.label} sesi`} value={fx.sounds?.[s.id] || ''} onChange={v => setSnd(s.id, v)} id={`fx-gs-${s.id}`} type="audio" small />
@@ -186,7 +240,8 @@ export function ExtraStudio({ db, appId, cfg, setCfg }) {
 
       {preview && (
         <Celebration preview kind={preview.kind} ev={full.events[preview.kind]} explain={full.explain[preview.diff]} data={sample(preview.kind, preview.diff)}
-          game={game} itemMap={itemMap} onDone={() => setPreview(null)} onRetry={() => setPreview(null)} />
+          game={game} itemMap={itemMap} onDone={() => setPreview(null)} onRetry={() => setPreview(null)}
+          onFixWrongs={() => setPreview(null)} fixLabel="⭐ yanlışlarını çöz, yıldızını kap!" fixSpeech="yanlışlarını çöz, yıldızını kap!" tts={fx.endTts !== false} />
       )}
     </div>
   );

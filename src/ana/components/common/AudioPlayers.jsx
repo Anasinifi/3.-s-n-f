@@ -85,14 +85,29 @@ export const FancyAudioPlayer = ({ src, label = "di̇nle", autoPlay = false, onE
   useEffect(() => { if (audioRef.current) audioRef.current.volume = volumeOf(src); }, [src]);
 
   // Yeni ekran açılınca çocuk hazırlansın diye kısa bir bekleme, sonra çal
+  // Telefonlar, çocuk ekrana dokunmadan sesin kendiliğinden çalmasına izin vermez (özellikle uygulama
+  // kayıtlı girişle doğrudan açılınca). Engellenirse: düğme yanıp söner ve çocuğun İLK dokunuşunda çalar.
+  const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!autoPlay) return undefined;
+    let unhook = null;
     const t = setTimeout(() => {
       if (!audioRef.current) return;
       stopSpeak();
-      audioRef.current.play().then(() => setPlaying(true)).catch(() => {});
+      audioRef.current.play().then(() => setPlaying(true)).catch(() => {
+        setBlocked(true);
+        const evs = ['pointerdown', 'touchend', 'click', 'keydown'];
+        const go = () => {
+          if (unhook) unhook();
+          const a = audioRef.current;
+          if (!a) return;
+          a.play().then(() => { setPlaying(true); setBlocked(false); }).catch(() => {});
+        };
+        evs.forEach(ev => window.addEventListener(ev, go, true));
+        unhook = () => { evs.forEach(ev => window.removeEventListener(ev, go, true)); unhook = null; };
+      });
     }, delay);
-    return () => { clearTimeout(t); if (audioRef.current) audioRef.current.pause(); };
+    return () => { clearTimeout(t); if (unhook) unhook(); setBlocked(false); if (audioRef.current) audioRef.current.pause(); };
   }, [autoPlay, src]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = () => {
@@ -132,7 +147,7 @@ export const FancyAudioPlayer = ({ src, label = "di̇nle", autoPlay = false, onE
        />
        <button
         onClick={toggle}
-        className={`relative ${dimClasses} rounded-full flex items-center justify-center shadow-md transition-all duration-300 transform active:scale-95 ${playing ? 'scale-110' : ''} ${colorClasses}`}
+        className={`relative ${dimClasses} rounded-full flex items-center justify-center shadow-md transition-all duration-300 transform active:scale-95 ${playing ? 'scale-110' : ''} ${blocked && !playing ? 'animate-bounce ring-4 ring-orange-300' : ''} ${colorClasses}`}
         style={{ boxShadow: playing ? `0 5px 15px -5px ${shadowColor}` : '' }}
        >
          {playing && (

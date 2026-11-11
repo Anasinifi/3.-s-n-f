@@ -197,12 +197,34 @@ export const memberLogin = async (db, appId, code, pin) => {
   return { child };
 };
 
-// Oyun durumunu kaydet (karakter, ev, araba, harcanan yıldız)
+// --- OYUN KAYDININ TELEFONDAKİ YEDEĞİ (her oyuncu için ayrı) ---
+// Sınıfım uygulamasında Firestore kuralı henüz "game" alanına yazmaya izin vermiyorsa
+// karakter / ev / harcanan elmas bu telefonda kaybolmasın diye.
+const GAME_LS = (id) => `ca_game_${id}`;
+export const saveGameLocal = (child) => {
+  if (!child?.id || child.isTest || !child.game) return;
+  try { localStorage.setItem(GAME_LS(child.id), JSON.stringify(child.game)); } catch (_) {}
+};
+export const loadGameLocal = (id) => { try { return JSON.parse(localStorage.getItem(GAME_LS(id)) || 'null'); } catch (_) { return null; } };
+// Sunucudaki ile telefondaki kayıttan yeni olanı seç (ts: son değişiklik zamanı)
+export const pickNewestGame = (serverGame, localGame) => {
+  if (!localGame) return serverGame || null;
+  if (!serverGame) return localGame;
+  return (Number(localGame.ts) || 0) > (Number(serverGame.ts) || 0) ? localGame : serverGame;
+};
+
+// Oyun durumunu kaydet (karakter, ev, araba, harcanan elmas)
 export const saveChildGame = async (db, appId, child, game) => {
   if (!child?.id) return;
   if (child.isTest) { try { localStorage.setItem('ca_admin_test_game', JSON.stringify(game)); } catch (_) {} return; }
   if (child.isLocal) { saveLocalChild({ ...child, game }); return; }
-  await updateDoc(doc(childrenCol(db, appId), child.id), { game, gameUpdatedAt: serverTimestamp() });
+  try { localStorage.setItem(GAME_LS(child.id), JSON.stringify(game)); } catch (_) {}
+  try {
+    await updateDoc(doc(childrenCol(db, appId), child.id), { game, gameUpdatedAt: serverTimestamp() });
+  } catch (e) {
+    if (isPermissionError(e)) { console.warn('oyun kaydı sadece bu telefonda tutuldu (Firestore kuralı izin vermiyor).'); return; }
+    throw e;
+  }
 };
 
 // İLERİDE: Google ile giriş (şimdilik kapalı)

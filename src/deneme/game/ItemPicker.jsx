@@ -5,6 +5,7 @@ import { VehicleArt } from './Vehicles';
 import { LocationBackdrop } from './LocationArt';
 import { THUMB_VIEWS } from './catalog';
 import { sfx, say } from './fx';
+import { DiamondShape } from './Celebration';
 
 // ============================================================================
 // --- GRUP: EŞYA SEÇİCİ / MARKET KARTLARI ---
@@ -140,14 +141,22 @@ export function ItemPicker({ title, items, currentId, isOwned, balance, onSelect
           return (
             <div key={it.id} className="relative">
               <button onClick={() => tap(it)}
-                className={`w-full relative rounded-3xl border-4 p-1 flex flex-col items-center bg-white transition-all active:scale-95 ${selected ? 'border-indigo-500 shadow-lg' : pending ? 'border-amber-400' : 'border-slate-100'} ${shake === it.id ? 'ca-wiggle' : ''}`}>
-                <ItemThumb item={it} game={game} itemMap={itemMap} size={thumb} />
-                <div className={`${big ? 'text-sm' : 'text-[12px]'} font-extrabold text-slate-700 leading-tight text-center line-clamp-2 min-h-[30px]`}>{it.name}</div>
-                {note && <div className="text-[11px] font-extrabold text-indigo-500">{note}</div>}
-                {!owned && <span className="absolute top-1.5 right-1.5 bg-yellow-300 text-amber-900 text-sm font-extrabold rounded-full px-2 shadow">⭐{it.price}</span>}
-                {selected && <span className="absolute top-1.5 left-1.5 bg-indigo-500 text-white text-xs font-extrabold rounded-full w-7 h-7 flex items-center justify-center">✓</span>}
+                className={`w-full relative rounded-3xl border-4 p-1.5 flex flex-col items-stretch bg-white transition-all active:scale-95 ${selected ? 'border-indigo-500 shadow-lg' : pending ? 'border-amber-400 shadow-md' : 'border-slate-100'} ${shake === it.id ? 'ca-wiggle' : ''}`}>
+                {/* eşya: üstünde hiçbir etiket yok (fiyat aşağıda) */}
+                <div className="relative rounded-2xl overflow-hidden flex items-center justify-center" style={{ background: 'radial-gradient(circle at 50% 42%, #ffffff 0%, #f1f5ff 62%, #e0e7ff 100%)' }}>
+                  <ItemThumb item={it} game={game} itemMap={itemMap} size={thumb} />
+                </div>
+                <div className={`${big ? 'text-sm' : 'text-[12px]'} mt-1 font-extrabold text-slate-700 leading-tight text-center line-clamp-2 min-h-[30px]`}>{it.name}</div>
+                {note && <div className="text-[11px] font-extrabold text-indigo-500 text-center">{note}</div>}
+                <div className="mt-1 h-8 flex items-center justify-between gap-1 pr-9">
+                  {selected
+                    ? <span className="inline-flex items-center gap-1 bg-indigo-500 text-white text-[11px] font-black rounded-full px-2 py-1">✓ seçili</span>
+                    : owned
+                      ? <span className="inline-flex items-center gap-1 bg-green-50 text-green-600 text-[11px] font-black rounded-full px-2 py-1 border border-green-200">🎒 senin</span>
+                      : <span className="inline-flex items-center gap-0.5 bg-cyan-100 text-cyan-800 text-sm font-black rounded-full pl-0.5 pr-2 py-0.5 border-2 border-cyan-300 shadow-sm"><DiamondShape size={18} />{it.price}</span>}
+                </div>
               </button>
-              <button onClick={() => { sfx('tap'); setZoom(it); }} title="büyüt" className="absolute bottom-10 right-1.5 w-9 h-9 rounded-full bg-white/95 border-2 border-slate-200 shadow flex items-center justify-center text-lg active:scale-90">🔍</button>
+              <button onClick={() => { sfx('tap'); setZoom(it); }} title="büyüt" className="absolute bottom-2.5 right-2.5 w-8 h-8 rounded-full bg-white border-2 border-slate-200 shadow flex items-center justify-center text-base active:scale-90">🔍</button>
             </div>
           );
         })}
@@ -161,17 +170,17 @@ export function ItemPicker({ title, items, currentId, isOwned, balance, onSelect
       <div className="flex-1 min-w-0">
         <div className="font-extrabold text-slate-800 truncate text-lg">{confirm.name}</div>
         <div className={`text-sm font-bold ${balance >= confirm.price ? 'text-green-600' : 'text-red-500'}`}>
-          {balance >= confirm.price ? 'almak ister misin?' : `${confirm.price - balance} yıldız daha topla!`}
+          {balance >= confirm.price ? 'almak ister misin?' : `${confirm.price - balance} elmas daha topla!`}
         </div>
       </div>
       <button onClick={() => { setConfirm(null); onPreview?.(null); }} className="px-3 py-3 rounded-xl bg-white font-extrabold text-slate-500">✖</button>
-      <button onClick={buy} className={`px-4 py-3 rounded-2xl font-extrabold text-lg shadow ${balance >= confirm.price ? 'bg-green-500 text-white active:scale-95' : 'bg-slate-200 text-slate-400'}`}>⭐{confirm.price} al</button>
+      <button onClick={buy} className={`px-4 py-3 rounded-2xl font-extrabold text-lg shadow ${balance >= confirm.price ? 'bg-green-500 text-white active:scale-95' : 'bg-slate-200 text-slate-400'}`}><span className="inline-flex items-center gap-1"><DiamondShape size={20} />{confirm.price} al</span></button>
     </div>
   );
 
   const zoomEl = zoom && (
     <ZoomModal item={zoom} game={game} itemMap={itemMap} onClose={() => setZoom(null)}
-      onPick={(it) => tap(it)} pickLabel={isOwned(zoom) ? 'seç ✓' : `⭐${zoom.price} - dene`} />
+      onPick={(it) => tap(it)} pickLabel={isOwned(zoom) ? 'seç ✓' : `💎${zoom.price} - dene`} />
   );
 
   if (inline) return <div>{grid}{buyBar}{zoomEl}</div>;
@@ -183,7 +192,7 @@ export function ItemPicker({ title, items, currentId, isOwned, balance, onSelect
         <div className="flex items-center justify-between mb-2">
           <div className="text-2xl font-extrabold text-slate-800">{title}</div>
           <div className="flex items-center gap-2">
-            <span className="bg-yellow-300 text-amber-900 font-extrabold rounded-full px-3 py-1 text-lg">⭐ {balance >= 999999 ? '∞' : balance}</span>
+            <span className="inline-flex items-center gap-1 bg-cyan-300 text-cyan-900 font-extrabold rounded-full pl-1 pr-3 py-0.5 text-lg border-2 border-white shadow"><DiamondShape size={24} />{balance >= 999999 ? '∞' : balance}</span>
             <button onClick={onClose} className="w-11 h-11 rounded-full bg-white shadow font-extrabold text-slate-500 text-xl">✖</button>
           </div>
         </div>

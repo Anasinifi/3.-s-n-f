@@ -4,8 +4,9 @@ import { DIFFICULTY_BY_ID, BUILTIN_MAPS } from './catalog';
 import { getTestDifficulty } from './progress';
 import { FancyAudioPlayer } from '../components/common/AudioPlayers';
 import { Terrain, PathLayer, IslandBase, ClearingBase, PlanetBase, Landmark, TreeBarrier, Mist, GoalChest, bezPoint, seeded, hashStr, INK } from './MapArt';
+import { ThemeTerrain, ThemePath, ThemeBase, ThemeLandmark, FogLayer } from './WorldArt';
 import { sfx, say, isMuted, setMuted, getFxConfig } from './fx';
-import { Celebration, StarShape } from './Celebration';
+import { Celebration, StarShape, DiamondShape } from './Celebration';
 
 // ============================================================================
 // --- GRUP: ADA ADA HARİTA EKRANI (gerçekçi çizgi film haritası) ---
@@ -23,7 +24,7 @@ export function Particles({ kind, count = 18, seed = 1 }) {
     const r = seeded(seed + 11);
     return Array.from({ length: count }).map((_, i) => ({
       left: r() * 100, top: r() * 100, size: kind === 'bubble' ? 8 + r() * 18 : kind === 'firefly' || kind === 'ember' ? 4 + r() * 4 : 3 + r() * 5,
-      dur: kind === 'sand' ? 4 + r() * 5 : kind === 'firefly' || kind === 'star' || kind === 'sparkle' ? 3 + r() * 4 : 7 + r() * 9,
+      dur: kind === 'sand' ? 4 + r() * 5 : kind === 'firefly' || kind === 'star' || kind === 'sparkle' ? 3 + r() * 4 : kind === 'meteor' ? 5 + r() * 6 : kind === 'rain' ? 1 + r() * 0.6 : 7 + r() * 9,
       delay: -r() * 12, key: i,
     }));
   }, [kind, count, seed]);
@@ -34,7 +35,7 @@ export function Particles({ kind, count = 18, seed = 1 }) {
         <span key={p.key} className={`ca-particle ca-p-${kind}`}
           style={{
             left: kind === 'sand' ? undefined : `${p.left}%`,
-            top: kind === 'bubble' || kind === 'ember' ? undefined : kind === 'snow' ? undefined : `${p.top}%`,
+            top: ['bubble', 'ember', 'snow', 'leaf', 'petal', 'rain', 'confetti'].includes(kind) ? undefined : `${p.top}%`,
             width: kind === 'sand' ? p.size * 6 : p.size, height: kind === 'sand' ? 2 : p.size,
             animationDuration: `${p.dur}s`, animationDelay: `${p.delay}s`,
           }} />
@@ -49,7 +50,8 @@ const addSeen = (child, id) => { try { const s = readSeen(child); s.add(id); loc
 
 const ARTS = { map_forest: 'forest', map_ocean: 'ocean', map_candy: 'candy', map_desert: 'desert', map_ice: 'ice', map_dino: 'dino', map_space: 'space' };
 const CROSS = { forest: 'chop', ocean: 'swim', candy: 'hop', desert: 'walk', ice: 'slide', dino: 'hop', space: 'fly' };
-const CHAR = 74; // haritadaki karakter boyu (genişlik)
+const CHAR = 70; // haritadaki karakter boyu (genişlik)
+const ISLAND_SCALE = 0.84; // adalar bir tık küçük
 
 // Karakterin elindeki balta
 function Axe() {
@@ -73,7 +75,29 @@ function Jetpack() {
   );
 }
 
-export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsland, onOpenStudio, onLogout, settings, welcomePlayed, setWelcomePlayed, loadingTestId, loadError, clearError, paused = false, testMode = false, onResetTest = null }) {
+// Sol kenardaki ÖDEV sekmesi (yeni ödev gelince rozet + zıplama)
+export function GorevTab({ count = 0, onOpen, label = 'ödev' }) {
+  return (
+    <button onClick={onOpen} aria-label="ödevler"
+      className={`ca-gorevtab absolute left-0 z-[26] pointer-events-auto flex flex-col items-center justify-center gap-0.5 rounded-r-3xl border-4 border-l-0 border-white shadow-2xl active:scale-95 ${count > 0 ? 'ca-gorev-alert' : ''}`}
+      style={{ top: '38%', width: 66, height: 96, background: 'linear-gradient(160deg,#f472b6 0%,#a855f7 55%,#6366f1 100%)' }}>
+      <svg width="34" height="38" viewBox="0 0 34 38">
+        <rect x="3" y="5" width="28" height="31" rx="5" fill="#fff" stroke={INK} strokeWidth="2.5" />
+        <rect x="10" y="1.5" width="14" height="8" rx="3" fill="#facc15" stroke={INK} strokeWidth="2.2" />
+        <path d="M9 17 l3 3 l5 -6 M9 27 l3 3 l5 -6" stroke="#22c55e" strokeWidth="2.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M20 18 L26 18 M20 28 L26 28" stroke="#94a3b8" strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+      <span className="text-[13px] font-extrabold text-white leading-none" style={{ textShadow: `0 1px 0 ${INK}` }}>{label}</span>
+      {count > 0 && (
+        <span className="absolute -top-2 -right-2 min-w-[28px] h-7 px-1.5 rounded-full bg-red-500 text-white text-sm font-black flex items-center justify-center border-[3px] border-white shadow-lg ca-badge-pop">{count > 99 ? '99+' : count}</span>
+      )}
+    </button>
+  );
+}
+
+export function WorldMap({ world, child, game, itemMap, cfg, balance, stars = 0, diamonds, onPlayIsland, onFixIsland, onOpenStudio, onLogout, settings, welcomePlayed, setWelcomePlayed, loadingTestId, loadError, clearError, paused = false, testMode = false, onResetTest = null, gorevCount = 0, onOpenGorev = null, gorevLabel = 'ödev', onMapDone = null }) {
+  const showNames = !!cfg?.showIslandNames;
+  const diamondBal = diamonds !== undefined ? diamonds : balance;
   const firstActive = Math.max(0, world.findIndex(m => m.unlocked && !m.allDone));
   const lastUnlocked = world.reduce((acc, m, i) => (m.unlocked ? i : acc), 0);
   const [mapIdx, setMapIdx] = useState(world.length ? (world.findIndex(m => m.unlocked && !m.allDone) >= 0 ? firstActive : lastUnlocked) : 0);
@@ -100,13 +124,16 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
 
   const map = world[Math.min(mapIdx, Math.max(0, world.length - 1))] || { ...BUILTIN_MAPS[0], islands: [], unlocked: true, allDone: false, currentIdx: -1 };
   const islands = map?.islands || [];
+  const wt = map.wt || null; // 1000 dünyadan biri (tema tabanlı çizim)
   const art = map.art || ARTS[map.theme] || ARTS[map.id] || 'ocean';
   const crossing = map.crossing || CROSS[art] || 'walk';
-  const GAP = 200, TOP = 250, BOTTOM = 170;
+  const planetLike = wt ? wt.base === 'planet' : art === 'space';
+  const darkBg = wt ? !!wt.space : art === 'space';
+  const GAP = 190, TOP = 250, BOTTOM = 170;
   const H = Math.max(islands.length * GAP + TOP + BOTTOM, typeof window !== 'undefined' ? window.innerHeight : 700);
   const pos = (i) => ({ x: width / 2 + (width * 0.25) * Math.sin(i * 1.15 + 0.5), y: H - BOTTOM - i * GAP });
   const pts = useMemo(() => islands.map((_, i) => pos(i)), [islands.length, width, H]); // eslint-disable-line react-hooks/exhaustive-deps
-  const seed = hashStr(map.id || 'x');
+  const seed = hashStr(map.id || 'x') + (wt?.seedSalt || 0);
   const seen = useMemo(() => readSeen(child), [child?.childId, seenTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Karakterin durduğu ada
@@ -181,6 +208,7 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
     const fx = getFxConfig(cfg);
     addSeen(child, key);
     setSeenTick(x => x + 1);
+    onMapDone?.(map.id);
     if (fx.events.map_done?.enabled !== false) setMapDone(fx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paused, !!travel, map.allDone, map.id]);
@@ -221,7 +249,7 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
     if (travel.kind === 'chop' && (travel.phase === 'chop' || travel.phase === 'fall')) charPos.x += flip ? 34 : -34;
   } else if (pts[pendingIdx > 0 ? pendingIdx - 1 : restIdx]) {
     const base = pts[pendingIdx > 0 ? pendingIdx - 1 : restIdx];
-    charPos = { x: base.x + (art === 'space' ? 0 : 36), y: base.y + (art === 'space' ? -58 : 8) };
+    charPos = { x: base.x + (planetLike ? 0 : 32), y: base.y + (planetLike ? -50 : 6) };
     flip = false;
   }
 
@@ -245,11 +273,11 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
   const customBg = map?.bgImage;
 
   return (
-    <div className="ca-game fixed inset-0 z-[60] overflow-hidden select-none" style={{ background: art === 'space' ? '#020617' : '#0288d1' }}>
+    <div className="ca-game fixed inset-0 z-[60] overflow-hidden select-none" style={{ background: wt ? wt.bg?.[1] : art === 'space' ? '#020617' : '#0288d1' }}>
       {/* ÜST ÇUBUK */}
       {/* Dar telefonlarda sağdaki ☰ menü ekran dışına taşmasın: harita adı küçülür, sağ grup hep görünür */}
       <div className="absolute top-0 inset-x-0 z-[25] px-2 sm:px-3 flex items-start justify-between gap-1.5 pointer-events-none" style={{ paddingTop: 'max(10px, env(safe-area-inset-top))' }}>
-        <div className="pointer-events-auto min-w-0 flex-1 max-w-[62%] flex items-center gap-0.5 bg-white/90 backdrop-blur rounded-full p-1 shadow-lg border-2 border-white">
+        <div className="pointer-events-auto min-w-0 flex-1 max-w-[54%] flex items-center gap-0.5 bg-white/90 backdrop-blur rounded-full p-1 shadow-lg border-2 border-white">
           <button onClick={() => goMap(-1)} disabled={mapIdx === 0} className="shrink-0 w-9 h-9 rounded-full text-2xl font-black text-slate-600 disabled:opacity-25 active:scale-90">‹</button>
           <div className="min-w-0 flex-1 px-0.5 text-center leading-tight" onClick={() => say(map?.name)}>
             <div className="text-[15px] font-extrabold text-slate-800 truncate">{map?.emoji} {map?.name || 'Harita'}</div>
@@ -259,9 +287,12 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
             {mapIdx < world.length - 1 && !world[mapIdx + 1]?.unlocked ? '🔒' : '›'}
           </button>
         </div>
-        <div className="pointer-events-auto shrink-0 flex items-center gap-1.5">
-          <div className="flex items-center gap-1 bg-yellow-300 border-4 border-white rounded-full pl-1 pr-2.5 py-0.5 shadow-lg">
-            <StarShape size={24} /><span className="text-lg font-extrabold text-amber-900">{balance >= 999999 ? '∞' : balance}</span>
+        <div className="pointer-events-auto shrink-0 flex items-center gap-1">
+          <div className="flex items-center gap-0.5 bg-yellow-300 border-[3px] border-white rounded-full pl-0.5 pr-2 py-0.5 shadow-lg" title="yıldızların">
+            <StarShape size={22} /><span className="text-base font-extrabold text-amber-900">{stars}</span>
+          </div>
+          <div className="flex items-center gap-0.5 bg-cyan-300 border-[3px] border-white rounded-full pl-0.5 pr-2 py-0.5 shadow-lg" title="elmasların">
+            <DiamondShape size={22} /><span className="text-base font-extrabold text-cyan-900">{diamondBal >= 999999 ? '∞' : diamondBal}</span>
           </div>
           <button aria-label="menü" onClick={() => { sfx('tap'); setMenu(m => !m); }} className="shrink-0 w-11 h-11 rounded-full bg-white shadow-lg active:scale-90 border-2 border-white flex flex-col items-center justify-center gap-[4px]">
             {[0, 1, 2].map(i => <span key={i} className="block w-5 h-[3px] rounded-full bg-slate-700" />)}
@@ -270,17 +301,21 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
       </div>
 
       {testMode && (
-        <button onClick={() => onLogout?.()} className="absolute top-[70px] left-1/2 -translate-x-1/2 z-20 bg-indigo-600 text-white text-xs font-extrabold px-3 py-1.5 rounded-full shadow-lg border-2 border-white whitespace-nowrap">🛠 yönetici deneme modu · ∞ yıldız · panele dön</button>
+        <button onClick={() => onLogout?.()} className="absolute top-[70px] left-1/2 -translate-x-1/2 z-20 bg-indigo-600 text-white text-xs font-extrabold px-3 py-1.5 rounded-full shadow-lg border-2 border-white whitespace-nowrap">🛠 yönetici deneme modu · ∞ elmas · panele dön</button>
       )}
       {menu && (
         <div className="absolute top-16 right-3 z-30 bg-white rounded-3xl shadow-2xl p-4 w-64 ca-pop">
           <div className="text-sm font-bold text-slate-500">oyuncu</div>
           <div className="text-xl font-extrabold text-slate-800">{child?.name}</div>
+          {cfg?.appKind === 'ana' ? (
+            <div className="mt-2 bg-indigo-50 rounded-2xl p-3 text-sm text-indigo-900 font-bold leading-relaxed">öğrenci numaran: <span className="font-extrabold tracking-wider">{child?.childId}</span></div>
+          ) : (
           <div className="mt-2 bg-indigo-50 rounded-2xl p-3 text-sm text-indigo-900 font-bold leading-relaxed">
             numaran: <span className="font-extrabold tracking-wider">{child?.childId}</span><br />
             {child?.pin ? <>şifren: <span className="font-extrabold tracking-wider">{child.pin}</span></> : <span className="text-indigo-500">şifre yok</span>}
             <div className="text-[11px] text-indigo-500 mt-1">başka telefondan "zaten üyeyim" ile bu bilgilerle girebilirsin.</div>
           </div>
+          )}
           {child?.premium && <div className="mt-2 text-center text-sm font-extrabold text-amber-600">👑 premium üye</div>}
           <button onClick={() => { const m = !muted; setMuted(m); setMutedState(m); if (!m) sfx('tap'); }} className="mt-3 w-full py-2.5 rounded-2xl bg-slate-100 text-slate-600 font-extrabold">{muted ? '🔇 sesler kapalı' : '🔊 sesler açık'}</button>
           {testMode && onResetTest && <button onClick={() => { if (window.confirm('deneme ilerlemesi (çözülen testler, karakter, ev) sıfırlansın mı?')) { onResetTest(); setMenu(false); } }} className="mt-2 w-full py-2.5 rounded-2xl bg-amber-50 text-amber-700 font-extrabold">↺ deneme ilerlemesini sıfırla</button>}
@@ -294,8 +329,8 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
           <svg className="absolute inset-0" width={width} height={H} style={{ overflow: 'hidden' }}>
             {customBg
               ? <image href={customBg} x="0" y="0" width={width} height={H} preserveAspectRatio="xMidYMid slice" />
-              : <Terrain art={art} W={width} H={H} pts={pts} seed={seed} />}
-            <PathLayer art={art} pts={pts} openUpTo={openUpTo} />
+              : wt ? <ThemeTerrain wt={wt} W={width} H={H} pts={pts} seed={seed} /> : <Terrain art={art} W={width} H={H} pts={pts} seed={seed} />}
+            {wt ? <ThemePath wt={wt} pts={pts} openUpTo={openUpTo} /> : <PathLayer art={art} pts={pts} openUpTo={openUpTo} />}
 
             {/* haritanın sonu: sandık */}
             <g transform={`translate(${width / 2} ${TOP - 70})`}>
@@ -314,11 +349,16 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
               const p = pts[i];
               const locked = isl.state === 'locked';
               return (
-                <g key={isl.test.id} transform={`translate(${p.x} ${p.y})`}>
+                <g key={isl.test.id} transform={`translate(${p.x} ${p.y}) scale(${ISLAND_SCALE})`}>
                 <g className={wiggle === i ? 'ca-wiggle' : ''} style={{ transformBox: 'fill-box', transformOrigin: 'center' }}>
                   {map.islandImage
                     ? <image href={map.islandImage} x="-80" y="-90" width="160" height="130" preserveAspectRatio="xMidYMid meet" style={{ filter: locked ? 'grayscale(1)' : 'none' }} />
-                    : (
+                    : wt ? (
+                      <g>
+                        <ThemeBase wt={wt} seed={seed + i * 7} idx={i} />
+                        <g transform={`translate(${planetLike ? 0 : -20} -4)`}><ThemeLandmark wt={wt} idx={i} /></g>
+                      </g>
+                    ) : (
                       <g>
                         {art === 'ocean' ? <IslandBase seed={seed + i * 7} />
                           : art === 'space' ? <PlanetBase seed={seed + i * 7} idx={i} />
@@ -337,8 +377,9 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
               );
             })}
 
+            {wt?.variant?.fog && <FogLayer W={width} H={H} />}
             {/* okyanus: martılar */}
-            {art === 'ocean' && [0.2, 0.55, 0.85].map((k, i) => (
+            {((!wt && art === 'ocean') || (wt && ['ocean', 'beach'].includes(wt.family))) && [0.2, 0.55, 0.85].map((k, i) => (
               <g key={`g${i}`} transform={`translate(0 ${H * k})`}>
                 <g className="ca-gull" style={{ animationDelay: `${-i * 7}s` }}>
                   <path d="M-12 0 Q-6 -8 0 0 Q6 -8 12 0" stroke={INK} strokeWidth="3" fill="none" className="ca-flap" />
@@ -353,14 +394,18 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
             const diff = DIFFICULTY_BY_ID[getTestDifficulty(isl.test, cfg)] || DIFFICULTY_BY_ID.easy;
             const isCurrent = isl.state === 'current';
             return (
-              <div key={isl.test.id} className="absolute" style={{ left: p.x - 80, top: p.y - 100, width: 160, height: 150 }}>
-                <button onClick={() => tapIsland(isl, i)} className="ca-island absolute inset-0" aria-label={isl.test.name} />
-                <span className={`pointer-events-none absolute w-12 h-12 rounded-full border-[5px] flex items-center justify-center text-lg font-extrabold shadow-lg ${isl.state === 'done' ? 'bg-green-500 text-white' : isCurrent ? 'bg-orange-500 text-white ca-current-ring' : 'bg-slate-500 text-white'}`}
-                  style={{ left: -4, top: 46, borderColor: diff.color }} title={diff.label}>
+              <div key={isl.test.id} className="absolute" style={{ left: p.x - 68, top: p.y - 86, width: 136, height: 128 }}>
+                <button onClick={() => tapIsland(isl, i)} className="ca-island absolute inset-0" aria-label={showNames ? isl.test.name : `ada ${i + 1}`} />
+                <span className={`pointer-events-none absolute w-11 h-11 rounded-full border-[4px] flex items-center justify-center text-base font-extrabold shadow-lg ${isl.state === 'done' ? (isl.status === 'perfect' ? 'bg-green-500 text-white' : 'bg-yellow-400 text-yellow-900') : isCurrent ? 'bg-orange-500 text-white ca-current-ring' : 'bg-slate-500 text-white'}`}
+                  style={{ left: -2, top: 38, borderColor: diff.color }} title={diff.label}>
                   {isl.state === 'done' ? '✓' : isl.state === 'locked' ? '🔒' : i + 1}
                 </span>
-                <div className="pointer-events-none absolute text-center" style={{ top: 136, left: -8, width: 176 }}>
-                  <div className={`inline-block max-w-full px-3 py-0.5 rounded-full text-[13px] font-extrabold shadow-md leading-tight line-clamp-2 border-2 ${isl.state === 'locked' ? 'bg-white/75 text-slate-500 border-white/60' : 'bg-white text-slate-800 border-white'}`}>{isl.test.name}</div>
+                {/* eksik (yanlışla) bitirilen ada: sarı tik + "eksik" etiketi */}
+                {isl.state === 'done' && isl.status !== 'perfect' && (
+                  <span className="pointer-events-none absolute px-1.5 py-0.5 rounded-full bg-yellow-300 text-yellow-900 border-2 border-white text-[10px] font-black shadow ca-nudge-soft" style={{ left: 22, top: 28 }}>eksik</span>
+                )}
+                <div className="pointer-events-none absolute text-center" style={{ top: 116, left: -8, width: 152 }}>
+                  {showNames && <div className={`inline-block max-w-full px-3 py-0.5 rounded-full text-[12px] font-extrabold shadow-md leading-tight line-clamp-2 border-2 ${isl.state === 'locked' ? 'bg-white/75 text-slate-500 border-white/60' : 'bg-white text-slate-800 border-white'}`}>{isl.test.name}</div>}
                   {isl.state === 'done' && (
                     <div className="flex justify-center gap-0.5 mt-0.5">
                       {Array.from({ length: Math.min(5, Math.max(1, isl.reward.perfect)) }).map((_, k, arr) => {
@@ -422,7 +467,10 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
         </div>
       </div>
 
-      <Particles kind={art === 'ocean' ? 'none' : map?.particle} seed={seed} count={12} />
+      <Particles kind={!wt && art === 'ocean' ? 'none' : map?.particle} seed={seed} count={wt?.variant?.particle === 'rain' || map?.particle === 'rain' ? 34 : 14} />
+
+      {/* SOL: ÖDEV SEKMESİ */}
+      {onOpenGorev && <GorevTab count={gorevCount} onOpen={() => { sfx('tap'); onOpenGorev(); }} label={gorevLabel} />}
 
       {/* ALT: KARAKTERİM / EVİM */}
       <div className="absolute bottom-0 inset-x-0 z-20 p-3 flex items-end justify-between pointer-events-none">
@@ -448,11 +496,15 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
         <div className="absolute inset-0 z-50 bg-slate-900/50 flex items-end sm:items-center justify-center p-3" onClick={() => setCard(null)}>
           <div className="ca-pop bg-white w-full max-w-sm rounded-[2rem] p-6 pt-4 text-center shadow-2xl" onClick={e => e.stopPropagation()}>
             <svg width="150" height="96" viewBox="-80 -90 160 110" className="mx-auto -mt-16" style={{ overflow: 'visible' }}>
-              {art === 'ocean' ? <IslandBase seed={seed + card.index * 7} /> : art === 'space' ? <PlanetBase seed={seed + card.index * 7} idx={card.index} /> : <ClearingBase seed={seed + card.index * 7} />}
-              <g transform="translate(-6 -6)"><Landmark art={art} idx={card.index} /></g>
+              {wt ? <g><ThemeBase wt={wt} seed={seed + card.index * 7} idx={card.index} /><g transform="translate(-6 -6)"><ThemeLandmark wt={wt} idx={card.index} /></g></g> : (
+                <g>
+                  {art === 'ocean' ? <IslandBase seed={seed + card.index * 7} /> : art === 'space' ? <PlanetBase seed={seed + card.index * 7} idx={card.index} /> : <ClearingBase seed={seed + card.index * 7} />}
+                  <g transform="translate(-6 -6)"><Landmark art={art} idx={card.index} /></g>
+                </g>
+              )}
             </svg>
-            <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mt-1">{map.name} · ada {card.index + 1}</div>
-            <div className="text-2xl font-extrabold text-slate-800 leading-tight mt-1">{card.test.name}</div>
+            <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mt-1 truncate">{map.name}</div>
+            <div className="text-2xl font-extrabold text-slate-800 leading-tight mt-1">{showNames ? card.test.name : `ada ${card.index + 1}`}</div>
             {(() => {
               const diff = DIFFICULTY_BY_ID[getTestDifficulty(card.test, cfg)] || DIFFICULTY_BY_ID.easy;
               return (
@@ -462,33 +514,53 @@ export function WorldMap({ world, child, game, itemMap, cfg, balance, onPlayIsla
                 </div>
               );
             })()}
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <div className={`rounded-2xl p-2 border-2 ${card.status === 'perfect' ? 'bg-yellow-50 border-yellow-300' : 'bg-slate-50 border-slate-100'}`}>
-                <div className="flex items-center justify-center gap-1 text-xl font-extrabold text-amber-600"><StarShape size={24} /> {card.reward.perfect}</div>
-                <div className="text-[12px] font-bold text-slate-500">hepsi doğru</div>
-              </div>
-              <div className={`rounded-2xl p-2 border-2 ${card.status === 'completed' ? 'bg-yellow-50 border-yellow-300' : 'bg-slate-50 border-slate-100'}`}>
-                <div className="flex items-center justify-center gap-1 text-xl font-extrabold text-amber-600"><StarShape size={24} /> {card.reward.completed}</div>
-                <div className="text-[12px] font-bold text-slate-500">yanlışla bitirince</div>
-              </div>
-            </div>
+            <RewardRows reward={card.reward} dreward={card.dreward} status={card.status} />
             {card.status === 'perfect' && <div className="mt-3 text-sm font-bold text-green-600">bu adayı harika bitirdin! istersen tekrar oyna.</div>}
-            {card.status === 'completed' && <div className="mt-3 text-sm font-extrabold text-amber-600">yanlışların vardı. hepsini doğru yaparsan {card.reward.perfect - card.reward.completed} yıldız daha kazanırsın!</div>}
+            {card.status === 'completed' && <div className="mt-3 text-sm font-extrabold text-amber-600">yanlışların vardı. sadece yanlışlarını çöz, kalan ödülü kap!</div>}
             {loadError && <div className="mt-3 bg-red-50 border-2 border-red-200 text-red-600 font-bold text-sm rounded-2xl p-2">{loadError}</div>}
             <div className="flex gap-2 mt-5">
               <button onClick={() => setCard(null)} className="flex-1 py-4 rounded-2xl font-extrabold text-slate-500 bg-slate-100">geri</button>
-              <button disabled={!!loadingTestId} onClick={() => { sfx('tap'); onPlayIsland(card.test); }} className="flex-[2] py-4 rounded-2xl font-extrabold text-white text-xl bg-gradient-to-b from-orange-400 to-orange-600 shadow-lg active:scale-95 disabled:opacity-60">
-                {loadingTestId === card.test.id ? 'yükleniyor...' : card.status === 'completed' ? 'düzeltmeye git ↻' : card.state === 'done' ? 'tekrar oyna ▶' : 'başla ▶'}
-              </button>
+              {card.status === 'completed' && onFixIsland ? (
+                <button disabled={!!loadingTestId} onClick={() => { sfx('tap'); onFixIsland(card.test); }} className="flex-[2] py-4 rounded-2xl font-extrabold text-white text-lg bg-gradient-to-b from-pink-400 to-fuchsia-600 shadow-lg active:scale-95 disabled:opacity-60 ca-nudge-soft">
+                  {loadingTestId === card.test.id ? 'yükleniyor...' : 'yanlışlarını çöz ⭐'}
+                </button>
+              ) : (
+                <button disabled={!!loadingTestId} onClick={() => { sfx('tap'); onPlayIsland(card.test); }} className="flex-[2] py-4 rounded-2xl font-extrabold text-white text-xl bg-gradient-to-b from-orange-400 to-orange-600 shadow-lg active:scale-95 disabled:opacity-60">
+                  {loadingTestId === card.test.id ? 'yükleniyor...' : card.state === 'done' ? 'tekrar oyna ▶' : 'başla ▶'}
+                </button>
+              )}
             </div>
+            {card.status === 'completed' && onFixIsland && (
+              <button disabled={!!loadingTestId} onClick={() => { sfx('tap'); onPlayIsland(card.test); }} className="mt-2 text-sm font-extrabold text-slate-400 underline">testi baştan çöz</button>
+            )}
           </div>
         </div>
       )}
 
       {mapDone && (
-        <Celebration kind="map_done" ev={mapDone.events.map_done} data={{ testName: map.name, starsGained: 0 }} game={game} itemMap={itemMap}
+        <Celebration kind="map_done" ev={mapDone.events.map_done} data={{ testName: map.name, starsGained: 0, diamondsGained: Number(cfg?.mapBonusDiamonds ?? 3) || 0 }} game={game} itemMap={itemMap}
           onDone={() => { setMapDone(null); if (mapIdx < world.length - 1 && world[mapIdx + 1]?.unlocked) setMapIdx(mapIdx + 1); }} />
       )}
+    </div>
+  );
+}
+
+// Ada kartındaki ödüller (yıldız ve elmas)
+function RewardRows({ reward, dreward, status }) {
+  const rows = [];
+  if (reward && (reward.perfect > 0 || reward.completed > 0)) rows.push({ k: 's', Icon: StarShape, r: reward, cls: 'text-amber-600' });
+  if (dreward && (dreward.perfect > 0 || dreward.completed > 0)) rows.push({ k: 'd', Icon: DiamondShape, r: dreward, cls: 'text-cyan-600' });
+  if (!rows.length) return null;
+  return (
+    <div className="mt-4 grid grid-cols-2 gap-2">
+      <div className={`rounded-2xl p-2 border-2 ${status === 'perfect' ? 'bg-yellow-50 border-yellow-300' : 'bg-slate-50 border-slate-100'}`}>
+        <div className="flex items-center justify-center gap-2 flex-wrap">{rows.map(({ k, Icon, r, cls }) => <span key={k} className={`flex items-center gap-0.5 text-xl font-extrabold ${cls}`}><Icon size={22} /> {r.perfect}</span>)}</div>
+        <div className="text-[12px] font-bold text-slate-500">hepsi doğru</div>
+      </div>
+      <div className={`rounded-2xl p-2 border-2 ${status === 'completed' ? 'bg-yellow-50 border-yellow-300' : 'bg-slate-50 border-slate-100'}`}>
+        <div className="flex items-center justify-center gap-2 flex-wrap">{rows.map(({ k, Icon, r, cls }) => <span key={k} className={`flex items-center gap-0.5 text-xl font-extrabold ${cls}`}><Icon size={22} /> {r.completed}</span>)}</div>
+        <div className="text-[12px] font-bold text-slate-500">yanlışla bitirince</div>
+      </div>
     </div>
   );
 }

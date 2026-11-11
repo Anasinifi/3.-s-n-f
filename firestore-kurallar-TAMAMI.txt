@@ -1,0 +1,82 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function caSignedIn() { return request.auth != null; }
+    function caIsAdmin() {
+      return caSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() in ['yonetici@kariyer26.app'];
+    }
+    function caChangedOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+    function caTouches(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny(keys);
+    }
+
+    // --- YÖNETİCİ: SADECE Çocuk Akademi'nin iki alanı (aynı projedeki başka uygulamalara dokunmaz) ---
+    function caApp(app) { return app in ['cocuk-akademi-pro-v33-fix-final', 'cocuk-akademi-test-projesi']; }
+    match /artifacts/{app}/{document=**} {
+      allow read, write: if caApp(app) && caIsAdmin();
+    }
+
+    // ========================================================================
+    // ÖĞRENCİ / ÇOCUK İZİNLERİ (iki uygulama için ortak)
+    // app: 'cocuk-akademi-pro-v33-fix-final' (sınıfım) | 'cocuk-akademi-test-projesi' (deneme)
+    // ========================================================================
+
+    // Testler: okunur. Zamanlı yayın, öğrenci cihazından da çalıştığı için
+    // SADECE "yayınla" alanlarının değişmesine izin verilir.
+    match /artifacts/{app}/public/data/tests/{id} {
+      allow read: if caApp(app) && caSignedIn();
+      allow update: if caApp(app) && caSignedIn()
+        && caChangedOnly(['isPublished', 'publishedAt', 'publishedBySchedule'])
+        && request.resource.data.isPublished == true;
+    }
+
+    // Sorular: sadece okunur
+    match /artifacts/{app}/public/data/questions/{id} {
+      allow read: if caApp(app) && caSignedIn();
+    }
+
+    // Ayarlar (görünüm, sesler, klasörler, oyun ayarları): sadece okunur
+    match /artifacts/{app}/public/data/settings/{id} {
+      allow read: if caApp(app) && caSignedIn();
+    }
+    // Zamanlı yayın kaydı: sıra ve geçmiş ilerletilebilir
+    match /artifacts/{app}/public/data/settings/publish_schedule {
+      allow update: if caApp(app) && caSignedIn() && caChangedOnly(['queue', 'lastRunDate', 'history']);
+    }
+    // "Güncelleme var" sinyali
+    match /artifacts/{app}/public/data/settings/sync {
+      allow write: if caApp(app) && caSignedIn() && request.resource.data.keys().hasOnly(['lastUpdate']);
+    }
+
+    // Cevaplar: çocuk kaydeder ve okur; değiştirme / silme yönetici
+    match /artifacts/{app}/public/data/responses/{id} {
+      allow read, create: if caApp(app) && caSignedIn();
+    }
+
+    // Öğrenci / oyuncu kayıtları: numarayla giriş için okunur
+    match /artifacts/{app}/public/data/children/{id} {
+      allow read: if caApp(app) && caSignedIn();
+    }
+
+    // DENEME OYUNU: çocuk kendi kaydını açar ve oyununu (karakter, ev, araba) kaydeder.
+    // Premium, şifre, numara ve yöneticinin verdiği yıldızlar çocuk tarafından DEĞİŞTİRİLEMEZ.
+    match /artifacts/cocuk-akademi-test-projesi/public/data/children/{id} {
+      allow create: if caSignedIn()
+        && request.resource.data.premium != true
+        && !request.resource.data.keys().hasAny(['manualStars']);
+      allow update: if caSignedIn()
+        && !caTouches(['premium', 'pin', 'childId', 'manualStars', 'isGuest']);
+    }
+
+    // Diğer uygulamanız (fc26-analyst-v1): giriş yapmış kullanıcılar okuyup yazabilir
+    match /artifacts/fc26-analyst-v1/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

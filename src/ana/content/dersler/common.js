@@ -95,14 +95,14 @@ export const wrongsFrom = (correctKey, cands, n) => {
 
 // Şablon: doğru şık başta (yer dengelemesi banka tarafından yapılır)
 //   audioOpts: true -> şık yazıları ekranda gizli, şıklar telefonla okunur (sesli şık)
-export const Q = ({ sig, text, speak, main, correct, wrongs, n = 4, audioOpts = false, hideText, tag }) => {
+export const Q = ({ sig, text, speak, main, mainImgName, correct, wrongs, n = 4, audioOpts = false, hideText, tag }) => {
   const w = wrongsFrom(correct.key, wrongs, n - 1);
   const strip = ({ key, ...o }) => o;
   return {
     sig: sig || `${text}|${correct.key}|${w.map(x => x.key).sort().join(',')}`,
     // ekrandaki yazıda emoji olmasın (vurgu bileşeni emojiyi bozuk gösterebiliyor)
     text: String(text || '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]\u{FE0F}?/gu, '').replace(/\(\s*\)/g, '').replace(/[ \t]{2,}/g, ' ').trim(),
-    speak: speak || '', mainImage: main || '',
+    speak: speak || '', mainImage: main || '', ...(mainImgName ? { mainImgName } : {}),
     options: [strip(correct), ...w.map(strip)],
     correctIndex: 0,
     hideOptionText: Boolean(audioOpts),

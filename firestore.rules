@@ -1,43 +1,25 @@
-// ============================================================================
-// ÇOCUK AKADEMİ · ÖNERİLEN FIRESTORE KURALLARI (yönetici ayrıldıktan sonra)
-// ============================================================================
-// NEDEN GEREKLİ?
-// Yönetici kodunu öğrenci uygulamalarından çıkarmak, paneli GİZLER ama verileri
-// tek başına KORUMAZ. Firebase anahtarı her web uygulamasında görünür; asıl kilit
-// bu kurallardır. Bu kurallarla:
-//   * soru / test / ayar / klasör yazma, silme  -> SADECE yönetici e-postası
-//   * çocuklar: testleri ve soruları okur, cevap kaydeder (deneme: kendi oyun kaydı)
-//
-// NASIL UYGULANIR?
-//   1) Yönetici hesabı (şifreyle giriş) 'yonetici@kariyer26.app' olarak aşağıda yazılı.
-//   2) Firebase Console -> Firestore Database -> Rules -> mevcut kuralları
-//      bir yere YEDEKLEYİN, sonra bu dosyanın tamamını yapıştırıp "Publish".
-//   3) Mevcut kurallarınızda başka koleksiyonlar (bu dosyada olmayan) varsa
-//      onların bloklarını da buraya ekleyin.
-//   4) Rules Playground ile deneyin: anonim kullanıcı "questions" okuyabilmeli
-//      ama yazamamalı; yönetici e-postası her şeyi yazabilmeli.
-//   5) Sorun olursa yedeğe geri dönün.
-// ============================================================================
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() { return request.auth != null; }
-    function isAdmin() {
-      return signedIn()
+    function caSignedIn() { return request.auth != null; }
+    function caIsAdmin() {
+      return caSignedIn()
         && request.auth.token.email != null
         && request.auth.token.email.lower() in ['yonetici@kariyer26.app'];
     }
-    function changedOnly(keys) {
+    function caChangedOnly(keys) {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
     }
-    function touches(keys) {
+    function caTouches(keys) {
       return request.resource.data.diff(resource.data).affectedKeys().hasAny(keys);
     }
 
-    // --- YÖNETİCİ: iki uygulamanın tüm verisi (okuma + yazma + silme) ---
+    // --- YÖNETİCİ: SADECE Çocuk Akademi'nin iki alanı (aynı projedeki başka uygulamalara dokunmaz) ---
+    function caApp(app) { return app in ['cocuk-akademi-pro-v33-fix-final', 'cocuk-akademi-test-projesi']; }
     match /artifacts/{app}/{document=**} {
-      allow read, write: if isAdmin();
+      allow read, write: if caApp(app) && caIsAdmin();
     }
 
     // ========================================================================
@@ -48,48 +30,53 @@ service cloud.firestore {
     // Testler: okunur. Zamanlı yayın, öğrenci cihazından da çalıştığı için
     // SADECE "yayınla" alanlarının değişmesine izin verilir.
     match /artifacts/{app}/public/data/tests/{id} {
-      allow read: if signedIn();
-      allow update: if signedIn()
-        && changedOnly(['isPublished', 'publishedAt', 'publishedBySchedule'])
+      allow read: if caApp(app) && caSignedIn();
+      allow update: if caApp(app) && caSignedIn()
+        && caChangedOnly(['isPublished', 'publishedAt', 'publishedBySchedule'])
         && request.resource.data.isPublished == true;
     }
 
     // Sorular: sadece okunur
     match /artifacts/{app}/public/data/questions/{id} {
-      allow read: if signedIn();
+      allow read: if caApp(app) && caSignedIn();
     }
 
     // Ayarlar (görünüm, sesler, klasörler, oyun ayarları): sadece okunur
     match /artifacts/{app}/public/data/settings/{id} {
-      allow read: if signedIn();
+      allow read: if caApp(app) && caSignedIn();
     }
     // Zamanlı yayın kaydı: sıra ve geçmiş ilerletilebilir
     match /artifacts/{app}/public/data/settings/publish_schedule {
-      allow update: if signedIn() && changedOnly(['queue', 'lastRunDate', 'history']);
+      allow update: if caApp(app) && caSignedIn() && caChangedOnly(['queue', 'lastRunDate', 'history']);
     }
     // "Güncelleme var" sinyali
     match /artifacts/{app}/public/data/settings/sync {
-      allow write: if signedIn() && request.resource.data.keys().hasOnly(['lastUpdate']);
+      allow write: if caApp(app) && caSignedIn() && request.resource.data.keys().hasOnly(['lastUpdate']);
     }
 
     // Cevaplar: çocuk kaydeder ve okur; değiştirme / silme yönetici
     match /artifacts/{app}/public/data/responses/{id} {
-      allow read, create: if signedIn();
+      allow read, create: if caApp(app) && caSignedIn();
     }
 
     // Öğrenci / oyuncu kayıtları: numarayla giriş için okunur
     match /artifacts/{app}/public/data/children/{id} {
-      allow read: if signedIn();
+      allow read: if caApp(app) && caSignedIn();
     }
 
     // DENEME OYUNU: çocuk kendi kaydını açar ve oyununu (karakter, ev, araba) kaydeder.
     // Premium, şifre, numara ve yöneticinin verdiği yıldızlar çocuk tarafından DEĞİŞTİRİLEMEZ.
     match /artifacts/cocuk-akademi-test-projesi/public/data/children/{id} {
-      allow create: if signedIn()
+      allow create: if caSignedIn()
         && request.resource.data.premium != true
         && !request.resource.data.keys().hasAny(['manualStars']);
-      allow update: if signedIn()
-        && !touches(['premium', 'pin', 'childId', 'manualStars', 'isGuest']);
+      allow update: if caSignedIn()
+        && !caTouches(['premium', 'pin', 'childId', 'manualStars', 'isGuest']);
+    }
+
+    // Diğer uygulamanız (fc26-analyst-v1): giriş yapmış kullanıcılar okuyup yazabilir
+    match /artifacts/fc26-analyst-v1/{document=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }

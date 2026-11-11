@@ -18,7 +18,17 @@ import { doc, runTransaction, setDoc, serverTimestamp } from 'firebase/firestore
 // "transaction" içinde olduğundan aynı test iki kez yayınlanmaz. Uygulama
 // birkaç gün açılmazsa kaçırılan günlerin testleri de sırayla yayınlanır.
 
-export const getScheduleRef = (db, appId) => doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'publish_schedule');
+// ÖDEV ve HARİTA testleri için AYRI zamanlayıcı:
+//   * uygulamanın eski (varsayılan) kanalı 'publish_schedule' belgesini kullanır
+//     (Sınıfım: ödev · Deneme: harita) -> eski sıra olduğu gibi devam eder
+//   * diğer kanal 'publish_schedule_gorev' / 'publish_schedule_harita' belgesini kullanır
+const ANA_APP = 'cocuk-akademi-pro-v33-fix-final';
+export const appKindOfId = (appId) => (appId === ANA_APP ? 'ana' : 'deneme');
+export const scheduleDocName = (appId, channel) => {
+  const legacy = appKindOfId(appId) === 'ana' ? 'gorev' : 'harita';
+  return !channel || channel === legacy ? 'publish_schedule' : `publish_schedule_${channel}`;
+};
+export const getScheduleRef = (db, appId, docName = 'publish_schedule') => doc(db, 'artifacts', appId, 'public', 'data', 'settings', docName);
 
 export const DEFAULT_SCHEDULE = {
   enabled: false,
@@ -110,7 +120,20 @@ export const previewUpcoming = (schedule, testsById = {}, now = new Date(), days
  * Yetki hatası (ör. öğrenci cihazı yazamıyorsa) sessizce yok sayılır.
  */
 export const runPublishScheduleIfDue = async (db, appId) => {
-  const ref = getScheduleRef(db, appId);
+  const otherDoc = appKindOfId(appId) === 'ana' ? 'publish_schedule_harita' : 'publish_schedule_gorev';
+  const a = await runScheduleDoc(db, appId, 'publish_schedule');
+  const b = await runScheduleDoc(db, appId, otherDoc);
+  const published = [...a, ...b];
+  if (published.length > 0) {
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'sync'), { lastUpdate: serverTimestamp() });
+    } catch (_) {}
+  }
+  return published;
+};
+
+const runScheduleDoc = async (db, appId, docName) => {
+  const ref = getScheduleRef(db, appId, docName);
   let published = [];
   try {
     published = await runTransaction(db, async (tx) => {
@@ -155,12 +178,6 @@ export const runPublishScheduleIfDue = async (db, appId) => {
   } catch (e) {
     if (e && e.code !== 'permission-denied') console.warn('zamanlı yayın kontrolü yapılamadı:', e?.message || e);
     return [];
-  }
-
-  if (published.length > 0) {
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'sync'), { lastUpdate: serverTimestamp() });
-    } catch (_) {}
   }
   return published;
 };

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, query, where, doc, getDocsFromServer, getDocFromServer, setDoc, updateDoc, addDoc, serverTimestamp, getCountFromServer, deleteField } from 'firebase/firestore';
 import { Loader2, PlusCircle, Music, Image as ImageIcon, Save, Layers, RotateCcw, FolderPlus, CheckCircle2, Brain, Volume2, BookOpen, Type } from 'lucide-react';
+import { findQuestionsByField, planOverwrite, removeIdsFromAllTests, mergeQuestionState, stripIdsFromTestState } from '../../utils/overwriteSave';
 import { commitOpsInChunks } from '../../utils/firestoreBatch';
+import { fbErrorTr, withTimeout } from '../../utils/fbError';
 import { MediaUploader } from '../common/MediaUploader';
 import { BulkVoiceUploader } from './BulkVoiceUploader';
 import { BulkImageUploader } from './BulkImageUploader';
@@ -27,7 +29,7 @@ const CAT_COLORS = {
 
 export function TemplateBankPanel({
   bank, db, appId, folders, orderedFolders, qFolderId, setQFolderId, qTimeLimit, setQTimeLimit, isMem, setIsMem, memTime, setMemTime,
-  keepSettingsPinned, setKeepSettingsPinned, defaultStyle, setQuestions
+  keepSettingsPinned, setKeepSettingsPinned, defaultStyle, setQuestions, setTests
 }) {
   const CATS = bank.categories;
   const F = {
@@ -190,7 +192,7 @@ export function TemplateBankPanel({
       map[k] = pathTo(bank.folderPath(g));
       if (g.tagFolders) bank.getTemplates(k).forEach(t => { if (t.tag !== undefined && t.tag !== '') map[`${k}||${t.tag}`] = pathTo(bank.folderFor(g, t)); });
     });
-    if (changed) await setDoc(settingsRef('folder_structure'), { list });
+    if (changed) await withTimeout(setDoc(settingsRef('folder_structure'), { list }));
     localFoldersRef.current = list;
     return (k, t) => (t && t.tag !== undefined && map[`${k}||${t.tag}`]) || map[k];
   };
@@ -211,76 +213,68 @@ export function TemplateBankPanel({
     try { const s = await getDocFromServer(settingsRef(`${bank.mediaPrefix}${key}`)); return s.exists() ? (s.data().images || {}) : {}; } catch (_) { return {}; }
   };
 
-  // --- Tek soruyu kaydet ---
+  // --- Tek soruyu kaydet (daha önce kaydedildiyse üzerine yazılır) ---
   const saveSingle = async () => {
     if (!tpl) return;
     setBusy('tek soru kaydediliyor...');
     try {
+      const existing = (await findQuestionsByField(db, appId, F.group, [groupKey])).filter(e => Number(e.data[F.tpl]) === tplIdx);
+      if (existing.length > 0 && !window.confirm(`"${tpl.title}" daha önce kaydedilmiş.\n\nÜzerine kaydedilsin mi? Eski soru silinip yerine yenisi yazılır (testlerdeki yeri korunur).`)) { setBusy(''); return; }
       const folderOf = await ensureFolders([groupKey]);
       const folderId = autoFolder ? folderOf(groupKey, tpl) : qFolderId;
       const data = { ...buildPayload(groupKey, tpl, tplIdx, media, groupAudio, groupText), ...commonFields(folderId, tpl) };
-      const ref = await addDoc(qCol, data);
-      setQuestions(prev => [{ ...data, id: ref.id, createdAt: { seconds: Math.floor(Date.now() / 1000) } }, ...prev]);
+      const plan = planOverwrite(db, appId, [{ matchKey: `${groupKey}|${tplIdx}`, data }], existing, e => `${e.data[F.group]}|${e.data[F.tpl]}`);
+      await commitOpsInChunks(db, plan.ops);
+      const testIds = await removeIdsFromAllTests(db, appId, plan.deletedIds);
+      setQuestions(prev => mergeQuestionState(prev, plan.created, plan.deletedIds));
+      if (setTests && testIds.length) setTests(prev => stripIdsFromTestState(prev, plan.deletedIds));
       refreshCount(groupKey);
-      alert(`"${tpl.title}" kaydedildi.`);
-    } catch (e) { console.error(e); alert('kaydedilirken hata oluştu: ' + (e?.message || '')); }
+      alert(existing.length > 0 ? `"${tpl.title}" üzerine kaydedildi.` : `"${tpl.title}" kaydedildi.`);
+    } catch (e) { console.error(e); alert('kaydedilirken hata oluştu.\n\n' + fbErrorTr(e)); }
     setBusy('');
   };
 
-  // --- Bir veya birden çok grubu toplu kaydet ---
-  const saveGroups = async (keys, note = '') => {
+  // --- Bir veya birden çok grubu toplu kaydet (daha önce kaydedilenlerin ÜZERİNE yazar) ---
+  const saveGroups = async (keys, label) => {
     const total = keys.reduce((a, k) => a + (bank.index[k]?.count || 0), 0);
-    const already = keys.reduce((a, k) => a + (savedCounts[k] || 0), 0);
     const target = autoFolder ? `"${bank.rootFolder} › ..." klasörlerine (otomatik)` : `"${(folders || []).find(f => f.id === qFolderId)?.name || 'Havuz (Ana Dizin)'}" klasörüne`;
-    let msg = `${total} soru ${target} kaydedilsin mi?\n(${qTimeLimit} sn, ${isMem ? `hafıza ${memTime} sn` : 'daimi göster'}; hafıza sorularında kendi süreleri kullanılır)\nTelefonla sesli okuma: ${ttsOn ? 'AÇIK' : 'KAPALI'} • soru yazısı: ${showQText ? 'görünür' : 'gizli'} • şık yazısı: ${showOptText ? 'görünür' : 'gizli'}${bank.hasStories ? ` • hikâyeyi tekrar dinleme: ${storyReplay ? 'AÇIK' : 'KAPALI'}` : ''}`;
-    if (already > 0) msg += `\n\n⚠️ Bu kalıplardan daha önce ${already} soru kaydedilmiş. Tekrar kaydederseniz kopyalar oluşur.`;
-    if (note) msg += note;
+    setBusy('daha önce kaydedilen sorular kontrol ediliyor...');
+    let existing = [];
+    try { existing = await findQuestionsByField(db, appId, F.group, keys); }
+    catch (e) { console.error(e); setBusy(''); alert('kayıtlı sorular kontrol edilemedi.\n\n' + fbErrorTr(e)); return; }
+    setBusy('');
+    let msg = `${label ? `${label}\n\n` : ''}${total} soru ${target} kaydedilsin mi?\n(${qTimeLimit} sn, ${isMem ? `hafıza ${memTime} sn` : 'daimi göster'}; hafıza sorularında kendi süreleri kullanılır)\nTelefonla sesli okuma: ${ttsOn ? 'AÇIK' : 'KAPALI'} • soru yazısı: ${showQText ? 'görünür' : 'gizli'} • şık yazısı: ${showOptText ? 'görünür' : 'gizli'}${bank.hasStories ? ` • hikâyeyi tekrar dinleme: ${storyReplay ? 'AÇIK' : 'KAPALI'}` : ''}`;
+    if (existing.length > 0) msg += `\n\n⚠️ DİKKAT: Bunlardan ${existing.length} soru daha önce kaydedilmiş.\nTAMAM derseniz ÜZERİNE kaydedilir: eski sorular silinip yerine yenileri yazılır, klasörleri de yeniden düzenlenir.\nTestlere eklenmiş sorular testteki yerinde kalır.`;
     if (!window.confirm(msg)) return;
     setBusy(`hazırlanıyor... 0/${total}`);
     try {
       const folderOf = await ensureFolders(keys);
-      const ops = []; const created = [];
+      const items = [];
       for (const k of keys) {
         const list = bank.getTemplates(k);
         const ov = await loadOverrides(k);
         const audioUrl = bankSettings.audio?.[k] || '';
         const textOv = bankSettings.text?.[k] || '';
         list.forEach((t, idx) => {
-          const ref = doc(qCol);
           const data = { ...buildPayload(k, t, idx, ov, audioUrl, textOv), ...commonFields(autoFolder ? folderOf(k, t) : qFolderId, t) };
-          ops.push({ type: 'set', ref, data });
-          created.push({ ...data, id: ref.id, createdAt: { seconds: Math.floor(Date.now() / 1000) } });
+          items.push({ matchKey: `${k}|${idx}`, data });
         });
       }
-      const res = await commitOpsInChunks(db, ops, { onProgress: (d, t) => setBusy(`kaydediliyor... ${d}/${t}`) });
-      setQuestions(prev => [...created, ...prev]);
-      keys.forEach(k => refreshCount(k));
-      alert(`${res.written} soru kaydedildi.${res.skipped.length ? `\n${res.skipped.length} soru boyut sınırı nedeniyle atlandı.` : ''}`);
-    } catch (e) { console.error(e); alert('toplu kayıt sırasında hata oluştu: ' + (e?.message || '')); }
+      const plan = planOverwrite(db, appId, items, existing, e => `${e.data[F.group]}|${e.data[F.tpl]}`);
+      const res = await commitOpsInChunks(db, plan.ops, { onProgress: (d, t) => setBusy(`kaydediliyor... ${d}/${t}`) });
+      const testIds = await removeIdsFromAllTests(db, appId, plan.deletedIds);
+      setQuestions(prev => mergeQuestionState(prev, plan.created, plan.deletedIds));
+      if (setTests && testIds.length) setTests(prev => stripIdsFromTestState(prev, plan.deletedIds));
+      // sayaçları sorgu atmadan güncelle (yüzlerce sayım sorgusu yerine)
+      setSavedCounts(prev => { const n = { ...prev }; keys.forEach(k => { n[k] = bank.getTemplates(k).length; }); return n; });
+      const yeni = plan.created.length - plan.updatedIds.length;
+      alert(`${plan.created.length} soru kaydedildi.${plan.updatedIds.length ? `\n${plan.updatedIds.length} soru eskisinin üzerine yazıldı, ${yeni} soru yeni eklendi.` : ''}${plan.deletedIds.length ? `\n${plan.deletedIds.length} fazla kopya silindi.` : ''}${res.skipped.length ? `\n${res.skipped.length} soru boyut sınırı nedeniyle atlandı.` : ''}`);
+    } catch (e) { console.error(e); alert('toplu kayıt sırasında hata oluştu.\n\n' + fbErrorTr(e)); }
     setBusy('');
   };
 
   // --- BANKANIN TAMAMINI TEK SEFERDE KAYDET (ör. İngilizce'nin 1000 sorusu) ---
   // Daha önce kaydedilmiş kalıplar atlanır (kopya oluşmaz); yarıda kalırsa tekrar basmak kalanları kaydeder.
-  const saveWholeBank = async () => {
-    const allKeys = Object.keys(bank.index);
-    setBusy('kayıtlı sorular kontrol ediliyor...');
-    const counts = {};
-    try {
-      for (let i = 0; i < allKeys.length; i += 15) {
-        const part = allKeys.slice(i, i + 15);
-        const res = await Promise.all(part.map(k => getCountFromServer(query(qCol, where(F.group, '==', k))).then(c => c.data().count).catch(() => 0)));
-        part.forEach((k, j) => { counts[k] = res[j]; });
-        setBusy(`kayıtlı sorular kontrol ediliyor... ${Math.min(i + 15, allKeys.length)}/${allKeys.length}`);
-      }
-    } catch (e) { console.warn(e); }
-    setSavedCounts(prev => ({ ...prev, ...counts }));
-    setBusy('');
-    const todo = allKeys.filter(k => !(counts[k] > 0));
-    const skippedGroups = allKeys.length - todo.length;
-    if (todo.length === 0) { alert('Bu bankanın bütün kalıpları daha önce kaydedilmiş. Yeni soru eklenmedi.'); return; }
-    await saveGroups(todo, skippedGroups ? `\n\n(${skippedGroups} kalıp daha önce kaydedildiği için atlanacak.)` : '');
-  };
 
   // --- Kayıtlı sorulardaki ilgili alanları güncelle ---
   const updateSavedQuestions = async (key, buildPatch, filterFn) => {
@@ -303,7 +297,7 @@ export function TemplateBankPanel({
       setBankSettings(prev => { const audio = { ...(prev.audio || {}) }; if (url) audio[groupKey] = url; else delete audio[groupKey]; return { ...prev, audio }; });
       const n = await updateSavedQuestions(groupKey, () => ({ audio: url || '' }), (d) => !media[d[F.tpl]]?.audio);
       if (n > 0) alert(`ses "${group.text}" kalıbındaki kayıtlı ${n} soruya da ${url ? 'eklendi' : 'kaldırıldı'}. (Kendi sesi olan sorular değişmedi.)`);
-    } catch (e) { console.error(e); alert('ses kaydedilemedi: ' + (e?.message || '')); }
+    } catch (e) { console.error(e); alert('ses kaydedilemedi.\n\n' + fbErrorTr(e)); }
     setBusy('');
   };
 
@@ -322,7 +316,7 @@ export function TemplateBankPanel({
         n += await updateSavedQuestions(k, () => ({ audio: url || '' }), (d) => !ov[d[F.tpl]]?.audio);
       }
       alert(`konu sesi ${url ? 'eklendi' : 'kaldırıldı'}.${n ? ` Kayıtlı ${n} soru da güncellendi.` : ''}`);
-    } catch (e) { console.error(e); alert('konu sesi kaydedilemedi: ' + (e?.message || '')); }
+    } catch (e) { console.error(e); alert('konu sesi kaydedilemedi.\n\n' + fbErrorTr(e)); }
     setBusy('');
   };
 
@@ -400,7 +394,7 @@ export function TemplateBankPanel({
     try {
       const idxs = storyScope(slot, tplIdx);
       await applyMediaChanges(groupKey, idxs.map(idx => ({ idx, slot, url })));
-    } catch (e) { console.error(e); alert('kaydedilemedi: ' + (e?.message || '')); }
+    } catch (e) { console.error(e); alert('kaydedilemedi.\n\n' + fbErrorTr(e)); }
     setBusy('');
   };
 
@@ -633,8 +627,8 @@ export function TemplateBankPanel({
             <button type="button" disabled={!!busy} onClick={() => saveGroups(category.concepts.flatMap(c => c.groups.map(g => g.key)))} className="flex-1 min-w-[160px] py-3 rounded-2xl bg-emerald-600 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow disabled:opacity-50">
               <CheckCircle2 size={16} /> "{category.label}" kategorisi ({categoryTotal} soru)
             </button>
-            <button type="button" disabled={!!busy} onClick={saveWholeBank} className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-fuchsia-600 to-indigo-600 text-white font-black text-sm flex items-center justify-center gap-1.5 shadow-lg disabled:opacity-50">
-              <Layers size={18} /> TÜMÜNÜ KAYDET: {bank.title} — bütün konular ({bank.countTemplates()} soru)
+            <button type="button" disabled={!!busy} onClick={() => saveGroups(Object.keys(bank.index), `"${bank.title}" sekmesinin TAMAMI`)} className="flex-1 min-w-[160px] py-3 rounded-2xl bg-rose-600 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow disabled:opacity-50" title="Bu sekmedeki bütün hazır soruları kaydeder; daha önce kaydedilenlerin üzerine yazar">
+              <Layers size={16} /> TÜMÜNÜ KAYDET · sekmenin tamamı ({bank.countTemplates()} soru)
             </button>
           </div>
           {busy && <div className="flex items-center gap-2 text-xs font-black text-indigo-600"><Loader2 size={14} className="animate-spin" /> {busy}</div>}

@@ -25,13 +25,11 @@ import { StudentGame } from './game/StudentGame';
 import { AdOverlay } from './game/AdOverlay';
 import { maybeShowAd } from './game/ads';
 import { loadGameConfig, getCachedGameConfig } from './game/gameConfig';
-import { getTestProgress, getRewardFor, starsForStatus, isTestDone } from './game/progress';
 import { getSavedChild, saveChildToDevice, forgetDeviceChild, createGuestChild, loadChildByDocId, memberLogin, explainFirebaseError, trySyncLocalChild } from './game/identity';
-import { Celebration } from './game/Celebration';
 import { STARTER_GAME } from './game/catalog';
-import { getFxConfig, resultEventKind, setFxConfig } from './game/fx';
-import { getItemMap, normalizeGame } from './game/gameConfig';
-import { getTestDifficulty } from './game/progress';
+import { setFxConfig } from './game/fx';
+import { testChannel } from './game/gameConfig';
+import { GameCelebration, makeStartInfo, prepareTest, buildCelebration } from './game/GameSession';
 import { installLook3D, setLook3D } from './game/look3d';
 
 // ============================================================================
@@ -76,7 +74,8 @@ export default function DenemeAdminApp() {
 
   const [loginError, setLoginError] = useState("");
   // --- OYUN DÜNYASI ---
-  const [gameConfig, setGameConfig] = useState(() => getCachedGameConfig());
+  const [gameConfig, setGameConfig] = useState(() => getCachedGameConfig(appId));
+  const [gorevOpen, setGorevOpen] = useState(false);
   const [savedChild, setSavedChild] = useState(() => getSavedChild());
   const [testStartInfo, setTestStartInfo] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -588,38 +587,29 @@ export default function DenemeAdminApp() {
     setSavedChild(getSavedChild());
   };
 
-  // Test bitince kazanılan yıldızı hesapla
-  const buildGameResult = (res) => {
-    if (!activeTest || !currentChild || !testStartInfo) return res;
-    const total = res.totalQuestions || (res.correctCount + res.wrongCount);
-    const newStatus = res.correctCount >= total && res.wrongCount === 0 ? 'perfect' : 'completed';
-    const reward = getRewardFor(activeTest, gameConfig);
-    const newStars = starsForStatus(newStatus, reward);
-    const starsGained = Math.max(0, newStars - (testStartInfo.prevStars || 0));
-    const unlockedNext = !isTestDone(testStartInfo.prevStatus, gameConfig) && isTestDone(newStatus, gameConfig);
-    return { ...res, starsGained, unlockedNext, isGame: true, newStatus, prevStatus: testStartInfo.prevStatus, reward, difficulty: getTestDifficulty(activeTest, gameConfig) };
-  };
-
-  // Testi başlat (haritadan ya da "hemen tekrar dene" ile)
-  const startTest = (t) => {
+  // Testi başlat (haritadan, ödevden ya da "yanlışlarını çöz" ile)
+  const startTest = (t, opts = {}) => {
     enterFullscreen();
-    const prevStatus = getTestProgress(currentChild, t, studentResponses);
-    setTestStartInfo({ prevStatus, prevStars: starsForStatus(prevStatus, getRewardFor(t, gameConfig)), startedAt: Date.now() });
-    setActiveTest({ ...t, isPreview: false });
+    setTestStartInfo(makeStartInfo(currentChild, t, studentResponses, gameConfig, opts));
+    setActiveTest({ ...prepareTest(t, currentChild, studentResponses, opts), isPreview: false });
     setView('quiz');
   };
 
-  // Test bitti: haritaya dön ve olayın kutlamasını göster
+  // Test bitti: haritaya / ödevlere dön ve kutlamayı göster
   const finishTestWithCelebration = (res) => {
-    const r = buildGameResult(res);
-    const kind = resultEventKind(r.prevStatus, r.newStatus);
-    setCelebration({
-      kind,
-      test: activeTest,
-      data: { starsGained: r.starsGained, reward: r.reward, difficulty: r.difficulty, correct: r.correctCount, wrong: r.wrongCount, testName: r.testName, newStatus: r.newStatus, unlockedNext: r.unlockedNext },
-    });
+    const c = buildCelebration(res, activeTest, testStartInfo, gameConfig);
+    setCelebration({ ...c, at: Date.now() });
     setActiveTest(null); setTestStartInfo(null);
     setView('studentHome');
+  };
+
+  const buildGameResult = (res) => res;
+
+  const reloadAndStart = async (t, opts) => {
+    setCelebration(null);
+    const r = await fetchTestQuestionsOnDemand(t);
+    if (r && r.ok === false) { alert('sorular yüklenemedi, internet bağlantını kontrol et.'); return; }
+    startTest((r && r.test) || t, opts);
   };
 
   const closeCelebration = async () => {
@@ -641,7 +631,7 @@ export default function DenemeAdminApp() {
     setView('studentHome');
   };
   const exitAdminTestMode = () => {
-    setTestMode(null); setCelebration(null); setActiveTest(null); setTestStartInfo(null);
+    setTestMode(null); setCelebration(null); setActiveTest(null); setTestStartInfo(null); setGorevOpen(false);
     setCurrentChild(null);
     setView('admin');
   };
@@ -760,6 +750,8 @@ export default function DenemeAdminApp() {
             onResetTest={testMode ? resetAdminTestProgress : null}
             welcomePlayed={welcomePlayed}
             setWelcomePlayed={setWelcomePlayed}
+            gorevOpen={gorevOpen}
+            setGorevOpen={setGorevOpen}
          />
         )}
 
@@ -794,7 +786,10 @@ export default function DenemeAdminApp() {
               const wasStudentTest = studentMode && !activeTest?.isPreview && currentChild;
               const exitedTest = activeTest;
               setActiveTest(null); setTestStartInfo(null); setView(studentMode ? 'studentHome' : 'admin');
-              if (wasStudentTest) setCelebration({ kind: 'exit', test: exitedTest, data: { testName: exitedTest?.name } });
+              if (wasStudentTest) {
+                const ch = testChannel(exitedTest, gameConfig);
+                setCelebration({ kind: 'exit', test: exitedTest, at: Date.now(), data: { testName: ch === 'gorev' || gameConfig?.showIslandNames ? exitedTest?.name : '', channel: ch } });
+              }
             }}
           />
         )}
@@ -843,31 +838,14 @@ export default function DenemeAdminApp() {
 
       <AdOverlay />
 
-      {celebration && currentChild && view === 'studentHome' && (() => {
-        const fx = getFxConfig(gameConfig);
-        const ev = fx.events[celebration.kind];
-        if (!ev || ev.enabled === false) { setTimeout(closeCelebration, 0); return null; }
-        const t = celebration.test;
-        const canRetry = t && celebration.kind !== 'exit' && celebration.data?.newStatus !== 'perfect';
-        return (
-          <Celebration
-            key={`${celebration.kind}_${t?.id || ''}`}
-            kind={celebration.kind}
-            ev={ev}
-            explain={fx.explain[celebration.data?.difficulty || 'easy']}
-            data={celebration.data}
-            game={normalizeGame(currentChild.game)}
-            itemMap={getItemMap(gameConfig)}
-            onDone={closeCelebration}
-            onRetry={canRetry ? async () => {
-              setCelebration(null);
-              const r = await fetchTestQuestionsOnDemand(t);
-              if (r && r.ok === false) { alert('sorular yüklenemedi, internet bağlantını kontrol et.'); return; }
-              startTest((r && r.test) || t);
-            } : null}
-          />
-        );
-      })()}
+      {celebration && currentChild && view === 'studentHome' && (
+        <GameCelebration
+          celebration={celebration} cfg={gameConfig} child={currentChild} settings={appSettings} appKind="deneme"
+          onClose={closeCelebration}
+          onFix={(t, wrongIds) => reloadAndStart(t, { fix: true, wrongIds })}
+          onRetry={(t) => reloadAndStart(t)}
+        />
+      )}
 
       {inspectData && (
        <QuestionModal

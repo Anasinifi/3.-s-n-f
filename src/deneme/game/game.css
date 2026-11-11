@@ -208,3 +208,72 @@
 .ca-windmill { animation: ca-spin 6s linear infinite; }
 @keyframes ca-bobboat { 0%,100% { transform: translateY(0) rotate(-1.5deg) } 50% { transform: translateY(3px) rotate(1.5deg) } }
 .ca-bobboat { animation: ca-bobboat 2.4s ease-in-out infinite; }
+
+/* --- 1000 DÜNYA: yeni hava parçacıkları --- */
+@keyframes ca-leaffall { 0% { transform: translateY(-10vh) translateX(0) rotate(0); opacity: 0 } 10% { opacity: 1 } 50% { transform: translateY(50vh) translateX(40px) rotate(200deg) } 100% { transform: translateY(110vh) translateX(-20px) rotate(420deg); opacity: .2 } }
+.ca-p-leaf { background: #ea580c; border-radius: 0 80% 0 80%; animation: ca-leaffall linear infinite; top: -10px; width: 10px !important; height: 7px !important; }
+.ca-p-leaf:nth-child(3n) { background: #f59e0b; } .ca-p-leaf:nth-child(4n) { background: #dc2626; }
+.ca-p-petal { background: #fbcfe8; border-radius: 80% 0 80% 0; animation: ca-leaffall linear infinite; top: -10px; width: 9px !important; height: 6px !important; box-shadow: 0 0 2px #f472b6; }
+@keyframes ca-rainfall { 0% { transform: translateY(-10vh) translateX(0); opacity: 0 } 8% { opacity: .8 } 100% { transform: translateY(110vh) translateX(-30px); opacity: .6 } }
+.ca-p-rain { background: linear-gradient(#ffffff00, #e0f2fe); width: 2px !important; height: 16px !important; animation: ca-rainfall linear infinite; animation-duration: 1.1s !important; top: -20px; transform: rotate(10deg); border-radius: 2px; }
+.ca-p-confetti { animation: ca-leaffall linear infinite; top: -10px; width: 7px !important; height: 7px !important; background: #f43f5e; }
+.ca-p-confetti:nth-child(2n) { background: #facc15; border-radius: 99px; } .ca-p-confetti:nth-child(3n) { background: #22c55e; } .ca-p-confetti:nth-child(5n) { background: #3b82f6; }
+@keyframes ca-meteor { 0% { transform: translate(0, 0) rotate(-35deg); opacity: 0 } 5% { opacity: 1 } 30% { transform: translate(-60vw, 45vh) rotate(-35deg); opacity: 0 } 100% { opacity: 0 } }
+.ca-p-meteor { width: 70px !important; height: 3px !important; background: linear-gradient(90deg, #fff, #fde04700); border-radius: 3px; animation: ca-meteor linear infinite; box-shadow: 0 0 8px #fde047; }
+
+/* --- ÖDEV SEKMESİ --- */
+.ca-gorevtab { transition: transform .2s; }
+@keyframes ca-gorev-alert { 0%,100% { transform: translateX(0) } 8% { transform: translateX(6px) rotate(-3deg) } 16% { transform: translateX(0) rotate(2deg) } 24% { transform: translateX(4px) } 32% { transform: translateX(0) } }
+.ca-gorev-alert { animation: ca-gorev-alert 2.6s ease-in-out infinite; }
+@keyframes ca-badge-pop { 0%,100% { transform: scale(1) } 50% { transform: scale(1.18) } }
+.ca-badge-pop { animation: ca-badge-pop 1s ease-in-out infinite; }
+@keyframes ca-nudge-soft { 0%,100% { transform: scale(1) } 50% { transform: scale(1.04) } }
+.ca-nudge-soft { animation: ca-nudge-soft 1.2s ease-in-out infinite; }
+
+/* --- TEST SONU (tam ekran, canlı) --- */
+@keyframes ca-bgspin { to { transform: rotate(360deg) scale(1.6) } }
+.ca-bgspin { animation: ca-bgspin 40s linear infinite; transform: scale(1.6); }
+@keyframes ca-titlebounce { 0%,100% { transform: translateY(0) scale(1) } 50% { transform: translateY(-4px) scale(1.04) } }
+.ca-titlebounce { animation: ca-titlebounce 1.6s ease-in-out infinite; display: inline-block; }
+@keyframes ca-gainpulse { 0%,100% { transform: scale(1) } 50% { transform: scale(1.07) } }
+.ca-gainpulse { animation: ca-gainpulse 1.3s ease-in-out infinite; }
+@keyframes ca-fixbtn { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,255,255,.7) } 50% { transform: scale(1.03); box-shadow: 0 0 0 12px rgba(255,255,255,0) } }
+.ca-fixbtn { animation: ca-fixbtn 1.4s ease-in-out infinite; }
+
+/* --- ÖDEV PANELİ --- */
+@keyframes ca-blob { 0%,100% { transform: translate(0,0) scale(1) } 33% { transform: translate(30px,-20px) scale(1.1) } 66% { transform: translate(-20px,20px) scale(.95) } }
+.ca-blob { animation: ca-blob 12s ease-in-out infinite; }
+@keyframes ca-slidein-left { from { transform: translateX(-100%); opacity: .4 } to { transform: translateX(0); opacity: 1 } }
+.ca-slidein-left { animation: ca-slidein-left .35s cubic-bezier(.2,.9,.3,1.2) both; }
+@keyframes ca-cardin { from { transform: translateY(16px) scale(.96); opacity: 0 } to { transform: translateY(0) scale(1); opacity: 1 } }
+.ca-cardin { animation: ca-cardin .4s ease-out both; }
+@keyframes ca-ribbon { 0%,100% { transform: rotate(8deg) scale(1) } 50% { transform: rotate(8deg) scale(1.12) } }
+.ca-ribbon { animation: ca-ribbon 1s ease-in-out infinite; }
+
+/* --- yeni test sonu animasyonları --- */
+@keyframes ca-crowndrop { 0% { transform: translateY(-260px) rotate(-20deg); opacity: 0 } 15% { opacity: 1 } 70% { transform: translateY(10px) rotate(4deg) } 85% { transform: translateY(-6px) rotate(-2deg) } 100% { transform: translateY(0) rotate(0) } }
+.ca-crowndrop { animation: ca-crowndrop 1.2s cubic-bezier(.3,.9,.4,1.1) both; }
+@keyframes ca-swing { 0%,100% { transform: rotate(-12deg) } 50% { transform: rotate(12deg) } }
+.ca-swing { animation: ca-swing 1.4s ease-in-out infinite; }
+@keyframes ca-bubbleup { 0% { transform: translateY(0) scale(.4); opacity: 0 } 15% { opacity: .95 } 85% { transform: translateY(-300px) scale(1); opacity: .95 } 100% { transform: translateY(-320px) scale(1.5); opacity: 0 } }
+.ca-bubbleup { animation: ca-bubbleup ease-out both; }
+@keyframes ca-wand { 0% { transform: rotate(-40deg) } 30% { transform: rotate(25deg) } 55% { transform: rotate(-15deg) } 80%,100% { transform: rotate(10deg) } }
+.ca-wand { animation: ca-wand 1.4s ease-in-out both; }
+@keyframes ca-sparkle { 0% { transform: translate(0,0) scale(0); opacity: 0 } 30% { opacity: 1; transform: translate(calc(var(--dx) * .5), calc(var(--dy) * .5)) scale(1.3) } 100% { transform: translate(var(--dx), var(--dy)) scale(.2); opacity: 0 } }
+.ca-sparkle { animation: ca-sparkle 1.3s ease-out both; }
+@keyframes ca-sunup { 0% { transform: translateY(170px) } 100% { transform: translateY(0) } }
+.ca-sunup { animation: ca-sunup 1.4s cubic-bezier(.2,.8,.3,1) both; }
+@keyframes ca-flutter { 0% { transform: translate(0,0) } 25% { transform: translate(calc(var(--dx) * .3), calc(var(--dy) * .4 - 30px)) } 50% { transform: translate(calc(var(--dx) * .6), calc(var(--dy) * .6 + 10px)) } 75% { transform: translate(calc(var(--dx) * .85), calc(var(--dy) * .8 - 20px)) } 100% { transform: translate(var(--dx), var(--dy)) } }
+.ca-flutter { animation: ca-flutter 3.2s ease-in-out infinite alternate; }
+@keyframes ca-wings { 0%,100% { transform: scaleX(1) } 50% { transform: scaleX(.25) } }
+.ca-wings { animation: ca-wings .22s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes ca-dance { 0%,100% { transform: translateY(0) rotate(-8deg) } 25% { transform: translateY(-18px) rotate(0) } 50% { transform: translateY(0) rotate(8deg) } 75% { transform: translateY(-18px) rotate(0) } }
+.ca-dance { animation: ca-dance .9s ease-in-out infinite; transform-origin: 50% 100%; }
+@keyframes ca-note { 0% { transform: translate(0,0) rotate(0); opacity: 0 } 15% { opacity: 1 } 100% { transform: translate(var(--dx), -220px) rotate(var(--rot)); opacity: 0 } }
+.ca-note { animation: ca-note 2.2s ease-out infinite; }
+@keyframes ca-cannon { 0%,100% { transform: rotate(0) } 10% { transform: rotate(-10deg) translateX(-6px) } 25% { transform: rotate(0) } }
+.ca-cannon { animation: ca-cannon 1.2s ease-out both; }
+
+/* --- oyunlar sekmesi --- */
+@keyframes ca-mg-rise { from { transform: translateY(0) } to { transform: translateY(-125vh) } }
+.ca-mg-rise { animation: ca-mg-rise linear forwards; }

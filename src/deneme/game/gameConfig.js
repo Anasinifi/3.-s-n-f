@@ -12,6 +12,27 @@ import { BUILTIN_ITEMS, BUILTIN_MAPS, STARTER_GAME, ROOM_TYPES, migrateRoom } fr
 //   customMaps / mapOverrides     : yönetici haritaları + hazır haritaların gizleme/isim/sıra ayarları
 //   customItems / itemOverrides   : yönetici eşyaları + hazır eşyaların fiyat/gizleme ayarları
 //   ads           : reklam altyapısı ayarları (premium öğrencilere hiç reklam yok)
+//   diamondRewards: ödev / harita testlerinden kazanılan ELMAS (eşyalar elmasla alınır)
+//   mapBonusDiamonds : bir haritanın tüm adalarını bitirince verilen ekstra elmas
+//   diamondPriceFactor: hazır eşyaların eski yıldız fiyatı x bu sayı = elmas fiyatı
+//
+// UYGULAMA TÜRÜ (appKind):
+//   'ana'    -> Sınıfım öğrenci uygulaması: reklam YOK, yıldız = tam çözülen test sayısı
+//               (öğretmen panelindeki yıldızla aynı), eski testler "ödev" sayılır.
+//   'deneme' -> çocuk oyunu: eski testler "harita" sayılır, ödevler elmas kazandırır.
+
+export const ANA_APP_ID = 'cocuk-akademi-pro-v33-fix-final';
+export const DENEME_APP_ID = 'cocuk-akademi-test-projesi';
+export const appKindOf = (appId) => (appId === ANA_APP_ID ? 'ana' : 'deneme');
+
+// Test kanalı: 'gorev' (ödevler / ödevler listesi) | 'harita' (ada ada harita)
+// Kanalı seçilmemiş eski testler: ana uygulamada ödev, denemede harita.
+export const legacyChannelOf = (kind) => (kind === 'ana' ? 'gorev' : 'harita');
+export const testChannel = (test, kindOrCfg) => {
+  const kind = typeof kindOrCfg === 'string' ? kindOrCfg : (kindOrCfg?.appKind || 'deneme');
+  const c = test?.channel;
+  return c === 'gorev' || c === 'harita' ? c : legacyChannelOf(kind);
+};
 
 export const DEFAULT_GAME_CONFIG = {
   starRewards: {
@@ -23,7 +44,19 @@ export const DEFAULT_GAME_CONFIG = {
   unlockRule: 'completed',
   islandsPerMap: 8,
   welcomeStars: 0,
-  paintPrice: 5,          // bir elle boyama hakkı kaç yıldız
+  // ödev testlerinden kazanılan yıldız (deneme: ödevler yıldız değil elmas verir)
+  gorevStars: { perfect: 0, completed: 0 },
+  // ELMAS: market eşyaları elmasla alınır
+  diamondRewards: {
+    gorev: { perfect: 3, completed: 1 },
+    harita: { perfect: 0, completed: 0 },
+  },
+  mapBonusDiamonds: 3,    // bir haritayı bitirince ekstra elmas
+  welcomeDiamonds: 0,     // yeni oyuncuya hoş geldin elması
+  diamondPriceFactor: 0.5,// hazır eşya: eski yıldız fiyatı x 0.5 = elmas fiyatı (en az 1)
+  showIslandNames: false, // haritada adaların altında test adı yazsın mı
+  paintPrice: 5,          // (eski) bir elle boyama hakkı kaç yıldız
+  paintDiamonds: 2,       // bir elle boyama hakkı kaç elmas
   look3d: true,           // karakter / ev / araba / harita 3D (hacimli) görünsün
   customMaps: [],
   mapOverrides: {},
@@ -49,57 +82,104 @@ export const DEFAULT_GAME_CONFIG = {
 
 const settingsRef = (db, appId) => doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'game_config');
 
-export const mergeGameConfig = (raw) => {
+// Ana uygulamaya özel varsayılanlar
+const ANA_DEFAULTS = { showIslandNames: true, welcomeDiamonds: 5 };
+const ANA_STAR = { perfect: 1, completed: 0 };
+
+export const mergeGameConfig = (raw, kindArg) => {
   const r = raw || {};
   const d = DEFAULT_GAME_CONFIG;
-  return {
-    ...d,
+  const appKind = kindArg || r.appKind || 'deneme';
+  const isAna = appKind === 'ana';
+  const base = isAna ? { ...d, ...ANA_DEFAULTS } : d;
+  const out = {
+    ...base,
     ...r,
+    appKind,
     starRewards: {
       easy: { ...d.starRewards.easy, ...(r.starRewards?.easy || {}) },
       medium: { ...d.starRewards.medium, ...(r.starRewards?.medium || {}) },
       hard: { ...d.starRewards.hard, ...(r.starRewards?.hard || {}) },
+    },
+    gorevStars: { ...d.gorevStars, ...(r.gorevStars || {}) },
+    diamondRewards: {
+      gorev: { ...d.diamondRewards.gorev, ...(r.diamondRewards?.gorev || {}) },
+      harita: { ...d.diamondRewards.harita, ...(r.diamondRewards?.harita || {}) },
     },
     customMaps: Array.isArray(r.customMaps) ? r.customMaps : [],
     mapOverrides: r.mapOverrides || {},
     customItems: Array.isArray(r.customItems) ? r.customItems : [],
     itemOverrides: r.itemOverrides || {},
     ads: { ...d.ads, ...(r.ads || {}) },
-    fx: { events: { ...(r.fx?.events || {}) }, explain: { ...(r.fx?.explain || {}) }, sounds: { ...(r.fx?.sounds || {}) }, muteDefaults: !!r.fx?.muteDefaults },
+    fx: { events: { ...(r.fx?.events || {}) }, explain: { ...(r.fx?.explain || {}) }, sounds: { ...(r.fx?.sounds || {}) }, muteDefaults: !!r.fx?.muteDefaults, endTts: r.fx?.endTts !== false, music: { ...(r.fx?.music || {}) } },
+    // oyunlar sekmesi: açık/kapalı ve tek tek kapatılan oyunlar
+    games: { enabled: r.games?.enabled !== false, off: { ...(r.games?.off || {}) } },
     builtinHidden: { ...(r.builtinHidden || {}) },
     starter: { ...(r.starter || {}) },
   };
+  if (isAna) {
+    // Sınıfım: yıldız = tam doğru çözülen test sayısı (öğretmen panelindeki sayıyla aynı kalsın)
+    out.starRewards = { easy: { ...ANA_STAR }, medium: { ...ANA_STAR }, hard: { ...ANA_STAR } };
+    out.gorevStars = { ...ANA_STAR };
+    // Sınıfım: yıldız SADECE ödev testlerinden; miktarı öğretmen ayarlar (varsayılan: hepsi doğru = 1)
+    out.anaGorevStars = { perfect: Math.max(0, Number(r.anaGorevStars?.perfect ?? 1) || 0), completed: Math.max(0, Number(r.anaGorevStars?.completed ?? 0) || 0) };
+    out.welcomeStars = 0;
+    // Sınıfım uygulamasında reklam yok
+    out.ads = { ...out.ads, enabled: false };
+  }
+  return out;
 };
 
 const LS_KEY = 'ca_game_config_cache';
 
-export const loadGameConfig = async (db, appId, { serverFirst = false } = {}) => {
+// Yönetici aynı tarayıcıda iki uygulamanın ayarını açabildiği için önbellek uygulamaya göre ayrı
+const lsKey = (appId) => (appId ? `${LS_KEY}_${appId}` : LS_KEY);
+
+export const loadGameConfig = async (db, appId, { serverFirst = false, kind } = {}) => {
+  const k = kind || appKindOf(appId);
   try {
     const snap = serverFirst ? await getDocFromServer(settingsRef(db, appId)) : await getDocCacheFirst(settingsRef(db, appId));
-    const cfg = mergeGameConfig(snap.exists() ? snap.data() : {});
-    try { localStorage.setItem(LS_KEY, JSON.stringify(snap.exists() ? snap.data() : {})); } catch (_) {}
+    const cfg = mergeGameConfig(snap.exists() ? snap.data() : {}, k);
+    try { localStorage.setItem(lsKey(appId), JSON.stringify(snap.exists() ? snap.data() : {})); } catch (_) {}
     return cfg;
   } catch (e) {
-    try { return mergeGameConfig(JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (_) { return mergeGameConfig({}); }
+    try { return mergeGameConfig(JSON.parse(localStorage.getItem(lsKey(appId)) || '{}'), k); } catch (_) { return mergeGameConfig({}, k); }
   }
 };
 
-export const getCachedGameConfig = () => {
-  try { return mergeGameConfig(JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (_) { return mergeGameConfig({}); }
+export const getCachedGameConfig = (appId) => {
+  const k = appId ? appKindOf(appId) : undefined;
+  try { return mergeGameConfig(JSON.parse(localStorage.getItem(lsKey(appId)) || '{}'), k); } catch (_) { return mergeGameConfig({}, k); }
 };
 
 export const saveGameConfig = async (db, appId, cfg) => {
-  const clean = JSON.parse(JSON.stringify(cfg));
+  const clean = JSON.parse(JSON.stringify({ ...cfg, appKind: cfg?.appKind || appKindOf(appId) }));
   await setDoc(settingsRef(db, appId), clean);
-  try { localStorage.setItem(LS_KEY, JSON.stringify(clean)); } catch (_) {}
+  try { localStorage.setItem(lsKey(appId), JSON.stringify(clean)); } catch (_) {}
+};
+
+// --- ELMAS FİYATI ---
+// Eşyalar artık ELMASLA alınır. Eşyanın "price" alanı elmas fiyatıdır:
+//   * yönetici elmas fiyatı verdiyse (dprice) o kullanılır,
+//   * yoksa eski yıldız fiyatı x diamondPriceFactor (yuvarlanır, ücretli eşya en az 1 elmas).
+// Eski yıldız fiyatı "starPrice" alanında saklanır (yönetici panelinde görünür).
+export const diamondPriceOf = (starPrice, dprice, cfg) => {
+  if (dprice !== undefined && dprice !== null && dprice !== '') return Math.max(0, Math.round(Number(dprice) || 0));
+  const p = Number(starPrice) || 0;
+  if (p <= 0) return 0;
+  const f = Number(cfg?.diamondPriceFactor ?? DEFAULT_GAME_CONFIG.diamondPriceFactor) || 0.5;
+  return Math.max(1, Math.round(p * f));
 };
 
 // --- KATALOG: hazır eşyalar (yönetici ayarlarıyla) + yönetici eşyaları ---
 export const getAllItems = (cfg, { includeHidden = false } = {}) => {
   const ov = cfg?.itemOverrides || {};
   const bh = cfg?.builtinHidden || {};
-  const builtin = BUILTIN_ITEMS.map(it => ({ ...it, ...(bh[it.cat] ? { hidden: true } : {}), ...(ov[it.id] || {}) }));
-  const custom = (cfg?.customItems || []).map(it => ({ ...it, builtin: false, price: Number(it.price) || 0 }));
+  const builtin = BUILTIN_ITEMS.map(it => {
+    const m = { ...it, ...(bh[it.cat] ? { hidden: true } : {}), ...(ov[it.id] || {}) };
+    return { ...m, starPrice: Number(m.price) || 0, price: diamondPriceOf(m.price, m.dprice, cfg) };
+  });
+  const custom = (cfg?.customItems || []).map(it => ({ ...it, builtin: false, starPrice: Number(it.price) || 0, price: diamondPriceOf(it.price, it.dprice, cfg) }));
   const all = [...builtin, ...custom];
   return includeHidden ? all : all.filter(it => !it.hidden);
 };
@@ -176,7 +256,12 @@ export const normalizeGame = (g) => {
     paints: { ...(src.paints || {}) },
     paintTokens: Number(src.paintTokens) || 0,
     yardPos: { ...(src.yardPos || {}) },
-    spent: Number(src.spent) || 0,
+    spent: Number(src.spent) || 0,           // (eski) markette harcanan yıldız
+    dspent: Number(src.dspent) || 0,         // markette harcanan elmas
+    legacyDiamonds: Number(src.legacyDiamonds) || 0, // eski yıldız birikiminden çevrilen elmas
+    mapBonus: Array.isArray(src.mapBonus) ? src.mapBonus : [], // ödülü alınmış haritalar
+    seenGorev: Array.isArray(src.seenGorev) ? src.seenGorev : [],
+    dver: Number(src.dver) || 0,
   };
 };
 

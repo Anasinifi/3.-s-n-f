@@ -18,6 +18,7 @@ export const interactiveInstruction = (q) => {
   if (t === 'interactive_maze' || q.mazeGrid) return 'Parmağınla doğru yolu çizerek havuca ulaş.';
   if (t === 'bar_graph' || q.barGraphGrid) return 'Resimleri say ve kaç tane varsa o kadar kutucuk boya.';
   if (t === 'sequence_memory' || q.sequenceGrid) return 'Kareler hangi sırayla yandıysa sen de öyle dokun.';
+  if (t === 'match_pairs' || q.matchGrid) return 'Eşleştir. Önce soldan bir karta, sonra sağdan eşine dokun.';
   if (t === 'event_order' || q.eventOrderGrid) return 'Olayları oluş sırasına göre sırala. Önce olana ilk dokun.';
   return '';
 };

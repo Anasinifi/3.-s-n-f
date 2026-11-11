@@ -7,16 +7,16 @@ src/
 │  ├─ QuizView.jsx             Soru çözme ekranı (hafıza sorularında memoryText desteği)
 │  └─ admin/
 │     ├─ AdminView.jsx         Yönetici paneli (sekmeler, klasörler, etkileşimli sorular)
-│     ├─ TemplateBankPanel.jsx Hazır soru bankası paneli (BİLSEM + ders sekmeleri ortak)
+│     ├─ TemplateBankPanel.jsx Hazır soru bankası paneli (Kavram + BİLSEM sekmeleri ortak)
 │     └─ ...
 ├─ activities/                 Etkileşimli soru bileşenleri (sudoku, labirent, kodlama...)
 ├─ content/                    HAZIR SORU ÜRETİCİLERİ (arayüzden bağımsız)
 │  ├─ helpers.js               Tohumlu rastgele, şık dizme, tekrarsız liste
 │  ├─ art.js                   SVG çizim kütüphanesi (nesneler, yüzler, efektler)
 │  ├─ bank.js                  Banka altyapısı (kategori › kavram › kalıp › şablon)
-│  ├─ dersler/                 3. sınıf: ingilizce, matematik, türkçe, hayat, fen (1000'er soru)
+│  ├─ concepts.js              Kavram soruları (EK-7)
 │  ├─ sudokuBank.js            Sudoku: 3x3/4x4/5x5 × kolay/orta/zor × 100
-│  └─ bilsem/                  BİLSEM soruları: 17 konu × (1. / 2. / 3. sınıf) × 100
+│  └─ bilsem/                  BİLSEM soruları: 12 konu × 3 seviye × 100
 │     ├─ index.js              Katalog (konular, seviyeler, soru metinleri)
 │     ├─ draw.js, common.js    Ortak çizim ve yardımcılar
 │     ├─ matrices.js           Matrisler

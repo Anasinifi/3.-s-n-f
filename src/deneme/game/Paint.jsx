@@ -4,7 +4,7 @@ import { sfx, say } from './fx';
 // ============================================================================
 // --- GRUP: ELLE BOYAMA (araç, evin dışı, oda) ---
 // ============================================================================
-// * Her boyama oturumu 1 "boyama hakkı" harcar. Hak yoksa yıldızla alınır (varsayılan 5 yıldız).
+// * Her boyama oturumu 1 "boyama hakkı" harcar. Hak yoksa elmasla alınır (varsayılan 2 elmas).
 // * Fırça izleri game.paints[anahtar] içinde saklanır: [{ d, c, w }]
 //   anahtar: 'veh_<id>' | 'house_<id>' | 'room_<oda>'
 // * Araç ve ev boyamasında boya sadece nesnenin üstüne gelir (dışarı taşmaz).
@@ -113,12 +113,12 @@ export function PaintConfirm({ price, tokens, balance, onYes, onNo }) {
         <div className="text-6xl">🖌️</div>
         <div className="text-2xl font-extrabold text-slate-800 mt-1">kendin boya!</div>
         <div className="text-base font-bold text-slate-500 mt-1">
-          {free ? <>bir boyama hakkın var. kullanmak ister misin? <b>({tokens} hak)</b></> : <>bir boyama hakkı <b className="text-amber-600">⭐ {price}</b> yıldız.</>}
+          {free ? <>bir boyama hakkın var. kullanmak ister misin? <b>({tokens} hak)</b></> : <>bir boyama hakkı <b className="text-cyan-600">💎 {price}</b> elmas.</>}
         </div>
-        {!can && <div className="mt-2 text-sm font-extrabold text-rose-500">{price - balance} yıldız daha topla!</div>}
+        {!can && <div className="mt-2 text-sm font-extrabold text-rose-500">{price - balance} elmas daha topla!</div>}
         <div className="flex gap-2 mt-5">
           <button onClick={onNo} className="flex-1 py-4 rounded-2xl bg-slate-100 font-extrabold text-slate-500">vazgeç</button>
-          <button disabled={!can} onClick={onYes} className="flex-[1.5] py-4 rounded-2xl bg-gradient-to-b from-pink-400 to-pink-600 text-white font-extrabold text-lg disabled:opacity-40">{free ? 'boyamaya başla' : `⭐${price} ile başla`}</button>
+          <button disabled={!can} onClick={onYes} className="flex-[1.5] py-4 rounded-2xl bg-gradient-to-b from-pink-400 to-pink-600 text-white font-extrabold text-lg disabled:opacity-40">{free ? 'boyamaya başla' : `💎${price} ile başla`}</button>
         </div>
       </div>
     </div>

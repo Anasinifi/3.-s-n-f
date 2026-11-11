@@ -145,7 +145,7 @@ const Head = ({ kind, skin }) => {
       {kind === 'frog' && <g><circle cx="76" cy="32" r="17" fill={sk} /><circle cx="124" cy="32" r="17" fill={sk} /></g>}
       {kind === 'unicorn' && <g><path d="M94 26 L100 -16 L106 26 Z" fill="#facc15" /><path d="M96 14 L104 10 M95 4 L104 0" stroke="#f59e0b" strokeWidth="2" /><path d="M62 40 Q60 10 92 14 Q76 24 72 44 Z" fill="#c084fc" /><path d="M66 50 Q50 40 54 22 Q62 34 72 38 Z" fill="#f472b6" /></g>}
       {kind === 'dino' && <g>{[70, 86, 100, 114, 130].map((x, i) => <path key={i} d={`M${x - 8} ${30 - Math.sin(i / 4 * Math.PI) * 8 + 4} L${x} ${16 - Math.sin(i / 4 * Math.PI) * 8} L${x + 8} ${30 - Math.sin(i / 4 * Math.PI) * 8 + 4} Z`} fill="#f97316" />)}</g>}
-      {HUMAN_EARS.includes(kind) && <g><circle cx="58" cy="68" r="9" fill={sk} /><circle cx="142" cy="68" r="9" fill={sk} /></g>}
+      {HUMAN_EARS.includes(kind) && <g><circle cx="58" cy="68" r="9" fill={sk} /><circle cx="142" cy="68" r="9" fill={sk} /><path d="M56 63 Q52 68 56 73" stroke={dk} strokeWidth="2.2" fill="none" strokeLinecap="round" opacity="0.7" /><path d="M144 63 Q148 68 144 73" stroke={dk} strokeWidth="2.2" fill="none" strokeLinecap="round" opacity="0.7" /></g>}
       {kind === 'robot'
         ? <g><rect x="56" y="24" width="88" height="84" rx="22" fill={sk} stroke="#94a3b8" strokeWidth="3" /><circle cx="54" cy="66" r="7" fill="#94a3b8" /><circle cx="146" cy="66" r="7" fill="#94a3b8" /></g>
         : kind === 'frog' ? <ellipse cx="100" cy="72" rx="48" ry="38" fill={sk} />
@@ -163,28 +163,35 @@ const Head = ({ kind, skin }) => {
           {/* sevimli parlak gözler */}
           {[84, 116].map((ex, i) => (
             <g key={ex}>
-              <ellipse cx={ex} cy="68" rx="7.6" ry="9.2" fill={kind === 'panda' ? '#fff' : '#1b1410'} />
-              {kind !== 'panda' && <ellipse cx={ex} cy="71" rx="5.4" ry="5.8" fill="#5b3a26" />}
-              {kind !== 'panda' && <ellipse cx={ex} cy="70.5" rx="3" ry="3.4" fill="#1b1410" />}
+              {/* göz akı (insan karakterde) */}
+              {kind === 'kid' && <ellipse cx={ex} cy="68.5" rx="8.6" ry="10" fill="#ffffff" />}
+              <ellipse cx={ex} cy="68" rx={kind === 'kid' ? 6.6 : 7.6} ry={kind === 'kid' ? 8.4 : 9.2} fill={kind === 'panda' ? '#fff' : '#1b1410'} />
+              {kind !== 'panda' && <ellipse cx={ex} cy="70.6" rx={kind === 'kid' ? 4.9 : 5.4} ry={kind === 'kid' ? 5.4 : 5.8} fill={kind === 'kid' ? '#6b4423' : '#5b3a26'} />}
+              {kind !== 'panda' && <ellipse cx={ex} cy="72.4" rx="3.6" ry="2.4" fill="#a16207" opacity="0.45" />}
+              {kind !== 'panda' && <ellipse cx={ex} cy="70.2" rx="2.8" ry="3.2" fill="#1b1410" />}
               {kind === 'panda' && <circle cx={ex + (i ? -1 : 1)} cy="69" r="4.4" fill="#1b1410" />}
-              <circle cx={ex - 2.6} cy="64.6" r="2.9" fill="#fff" />
-              <circle cx={ex + 2.8} cy="72.6" r="1.3" fill="#fff" opacity="0.9" />
-              <path d={`M${ex - 7} ${62} Q${ex - 9} ${59} ${ex - 10} ${57.5}`} stroke="#1b1410" strokeWidth="1.6" strokeLinecap="round" opacity={i ? 0 : 0.0} />
+              <circle cx={ex - 2.4} cy="64.8" r="2.7" fill="#fff" />
+              <circle cx={ex + 2.6} cy="72.4" r="1.2" fill="#fff" opacity="0.9" />
+              {/* üst göz kapağı + kirpik */}
+              {!['robot', 'panda'].includes(kind) && <path d={`M${ex - 8.4} ${66} Q${ex} ${56.4} ${ex + 8.4} ${66}`} stroke="#1b1410" strokeWidth="2.4" fill="none" strokeLinecap="round" />}
+              {kind === 'kid' && <path d={i ? `M${ex + 7.6} ${63.6} l3.2 -2.6` : `M${ex - 7.6} ${63.6} l-3.2 -2.6`} stroke="#1b1410" strokeWidth="2" strokeLinecap="round" />}
             </g>
           ))}
           {/* kaşlar */}
           {!['robot', 'frog'].includes(kind) && <g stroke={kind === 'kid' ? shade(skin, -90) : shade(ANIMAL_SKIN[kind] || skin, -70)} strokeWidth="2.2" strokeLinecap="round" fill="none" opacity="0.55"><path d="M77 55 Q84 51 91 54" /><path d="M109 54 Q116 51 123 55" /></g>}
         </g>}
-      <ellipse cx="72" cy="83" rx="9" ry="5.2" fill="#fb7185" opacity="0.42" />
-      <ellipse cx="128" cy="83" rx="9" ry="5.2" fill="#fb7185" opacity="0.42" />
+      <ellipse cx="72" cy="83" rx="11" ry="6.6" fill="#fb7185" opacity="0.18" />
+      <ellipse cx="128" cy="83" rx="11" ry="6.6" fill="#fb7185" opacity="0.18" />
+      <ellipse cx="72" cy="83" rx="7.6" ry="4.4" fill="#fb7185" opacity="0.34" />
+      <ellipse cx="128" cy="83" rx="7.6" ry="4.4" fill="#fb7185" opacity="0.34" />
       <circle cx="69" cy="81" r="1.3" fill="#fff" opacity="0.7" /><circle cx="125" cy="81" r="1.3" fill="#fff" opacity="0.7" />
-      {kind === 'kid' && <ellipse cx="100" cy="79" rx="2.6" ry="1.8" fill={shade(skin, -35)} opacity="0.7" />}
+      {kind === 'kid' && <g><path d="M97 80.5 Q100 83 103 80.5" stroke={shade(skin, -55)} strokeWidth="1.8" fill="none" strokeLinecap="round" opacity="0.8" /><ellipse cx="99" cy="77.6" rx="1.6" ry="1.1" fill="#fff" opacity="0.5" /></g>}
       {['cat', 'bunny', 'bear', 'panda', 'koala', 'mouse', 'tiger', 'lion', 'fox', 'dog', 'monkey'].includes(kind) && <ellipse cx="100" cy="80" rx={kind === 'koala' ? 9 : 5.5} ry={kind === 'koala' ? 7 : 4} fill={['bear', 'panda', 'koala', 'dog', 'fox', 'lion', 'tiger'].includes(kind) ? '#3f2a1d' : '#f472b6'} />}
       {kind === 'penguin' && <path d="M92 78 L108 78 L100 88 Z" fill="#f59e0b" />}
       {(kind === 'cat' || kind === 'mouse' || kind === 'tiger') && <path d="M70 82 L52 78 M70 86 L52 88 M130 82 L148 78 M130 86 L148 88" stroke="#475569" strokeWidth="1.5" />}
       {kind === 'frog'
         ? <path d="M72 82 Q100 104 128 82" stroke="#166534" strokeWidth="3.5" fill="none" strokeLinecap="round" />
-        : <g><path d="M90 87 Q100 99 110 87 Q100 92 90 87 Z" fill="#9f1239" stroke="#7c2d12" strokeWidth="1.6" strokeLinejoin="round" /><path d="M95 92.5 Q100 96 105 92.5 Q100 90.5 95 92.5 Z" fill="#fb7185" /></g>}
+        : <g><path d="M89.5 87 Q100 100 110.5 87 Q100 91.5 89.5 87 Z" fill="#9f1239" stroke="#7c2d12" strokeWidth="1.6" strokeLinejoin="round" /><path d="M92 88.4 Q100 91.6 108 88.4 L107 90.2 Q100 92.6 93 90.2 Z" fill="#fff" opacity="0.95" /><path d="M95 93.2 Q100 96.6 105 93.2 Q100 91.4 95 93.2 Z" fill="#fb7185" /><path d="M88.6 86.4 q-1.6 -0.6 -2.4 0.8 M111.4 86.4 q1.6 -0.6 2.4 0.8" stroke="#7c2d12" strokeWidth="1.2" fill="none" strokeLinecap="round" opacity="0.6" /></g>}
       {kind === 'dog' && <path d="M97 95 Q100 106 104 95 Z" fill="#f43f5e" />}
     </g>
   );
@@ -687,7 +694,8 @@ export function Avatar({ game, itemMap, preview = {}, size = 160, className = ''
           </filter>
         </defs>
       )}
-      <ellipse cx="100" cy="252" rx="52" ry="8" fill="#000" opacity="0.12" />
+      <ellipse cx="100" cy="252" rx="56" ry="9" fill="#000" opacity="0.08" />
+      <ellipse cx="100" cy="252" rx="40" ry="6" fill="#000" opacity="0.1" />
       <g filter={outline ? `url(#${fid})` : undefined}>
         {showClothes && top && !top.image && <g transform={clothT}><g filter={shading ? `url(#${fid}v)` : undefined}><TopBack r={top.render || {}} /></g></g>}
         {showHair && !hair.image && !(hatHidesHair && hk === 'curly') && <g transform={headT}><g filter={shading ? `url(#${fid}v)` : undefined}><HairBack kind={hk} c={hairColor} /></g></g>}
@@ -699,8 +707,8 @@ export function Avatar({ game, itemMap, preview = {}, size = 160, className = ''
             <rect x="102" y="182" width="22" height="58" rx="9" fill={bodyC} />
             <rect x="44" y="116" width="22" height="64" rx="10" fill={bodyC} transform="rotate(8 55 118)" />
             <rect x="134" y="116" width="22" height="64" rx="10" fill={bodyC} transform="rotate(-8 145 118)" />
-            <circle cx="50" cy="182" r="10" fill={kind === 'robot' ? '#64748b' : bodyC} />
-            <circle cx="150" cy="182" r="10" fill={kind === 'robot' ? '#64748b' : bodyC} />
+            <path d="M42 178 Q40 192 50 193 Q60 193 59 181 Q62 176 58 174 Q56 172 54 175 L52 172 Q46 170 42 178 Z" fill={kind === 'robot' ? '#64748b' : bodyC} />
+            <path d="M158 178 Q160 192 150 193 Q140 193 141 181 Q138 176 142 174 Q144 172 146 175 L148 172 Q154 170 158 178 Z" fill={kind === 'robot' ? '#64748b' : bodyC} />
             <rect x="62" y="112" width="76" height="80" rx="18" fill={bodyC} />
             <rect x="90" y="98" width="20" height="20" fill={kind === 'robot' ? '#64748b' : bodyC} />
           </g>
@@ -713,6 +721,7 @@ export function Avatar({ game, itemMap, preview = {}, size = 160, className = ''
             {top && (top.image ? <ImageLayer item={top} slot="top" baseId={baseId} /> : <g filter={shading ? `url(#${fid}v)` : undefined}><Top r={top.render || {}} /></g>)}
           </g>
         )}
+        {!base.image && kind !== 'robot' && <ellipse cx="100" cy="109" rx="17" ry="5.5" fill="#000" opacity="0.13" />}
         {!base.image && <g filter={shading ? `url(#${fid}v)` : undefined}><Head kind={kind} skin={skin} /></g>}
         <g transform={headT}>
           {showHair && (hair.image ? <ImageLayer item={hair} slot="hair" baseId={baseId} /> : <g><g filter={shading ? `url(#${fid}v)` : undefined}><HairFront kind={hatHidesHair && ['spiky', 'mohawk', 'bun', 'messy', 'curly', 'quiff', 'topknot', 'twinBuns', 'puffs'].includes(hk) ? 'short' : hk} c={hairColor} /></g><HairShine kind={hk} c={hairColor} />{hair.render?.clip && !hatHidesHair && (['long', 'wavy', 'longCurly', 'bob', 'bangs'].includes(hk) ? <Barrette c={hair.render.clip} x={126} y={34} /> : <Bow c={hair.render.clip} x={128} y={32} s={0.9} />)}</g>)}

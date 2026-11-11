@@ -6,8 +6,12 @@ import { CAR_MOD_SLOTS } from './catalog';
 import { CATEGORIES, CATEGORY_BY_ID, ROOM_SLOTS, CAR_SLOTS, BUILTIN_MAPS, PARTICLES, DIFFICULTIES, STARTER_GAME, MAP_ARTS, CROSSINGS, THUMB_VIEWS } from './catalog';
 import { RoomInterior } from './Scenes';
 import { SAMPLE_ITEMS, SAMPLE_MAP, downloadTemplate } from './samplePack';
-import { getAllItems, getItemMap, getAllMaps, saveGameConfig, mergeGameConfig, normalizeGame, applyStarter } from './gameConfig';
-import { buildWorld, getStarBalance, getRewardFor } from './progress';
+import { getAllItems, getItemMap, getAllMaps, saveGameConfig, mergeGameConfig, normalizeGame, applyStarter, testChannel, diamondPriceOf } from './gameConfig';
+import { buildWorld, getStarBalance, getEarnedStars, getDiamondBalance, getRewardFor, getDiamondRewardFor, storedStars, storedDiamondBalance } from './progress';
+import { MINI_GAMES } from './MiniGames';
+import { getGeneratedWorld, GENERATED_WORLD_COUNT, PLACE_COUNT } from './worlds';
+import { WorldThumb } from './WorldArt';
+import { DiamondShape, StarShape } from './Celebration';
 import { ItemThumb } from './ItemPicker';
 import { Avatar } from './Avatar';
 import { previewAd } from './ads';
@@ -20,7 +24,7 @@ import { previewAd } from './ads';
 // Test atamaları (harita, zorluk, ada sırası) doğrudan test belgelerine yazılır.
 
 const SUBTABS = [
-  ['stars', '⭐ Yıldızlar'],
+  ['stars', '⭐ Yıldız & 💎 Elmas'],
   ['maps', '🗺️ Haritalar & Adalar'],
   ['items', '🧱 Dünya Kurucu & Market'],
   ['premium', '👑 Premium Öğrenciler'],
@@ -36,13 +40,16 @@ const uid = (p) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).
 
 export function GameAdminPanel({ db, appId, cfg, setCfg, tests, setTests, fetchAdminTests, childrenList, setChildrenList, fetchAdminChildren, responses, fetchAdminResponses, onStartTestMode }) {
   const [sub, setSub] = useState('stars');
+  const isAna = (cfg?.appKind || mergeGameConfig(cfg).appKind) === 'ana';
+  // Sınıfım: reklam ve premium yok (öğrenciler öğretmen panelinden yönetilir)
+  const subtabs = isAna ? SUBTABS.filter(([id]) => id !== 'premium' && id !== 'ads') : SUBTABS;
   const [draft, setDraft] = useState(() => mergeGameConfig(cfg));
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { if (!dirty) setDraft(mergeGameConfig(cfg)); }, [cfg]); // eslint-disable-line
   useEffect(() => { fetchAdminTests?.(); }, []); // eslint-disable-line
-  useEffect(() => { if (sub === 'premium') { fetchAdminChildren?.(); fetchAdminResponses?.(); } }, [sub]); // eslint-disable-line
+  useEffect(() => { if (sub === 'premium') { fetchAdminChildren?.(); } }, [sub]); // cevaplar okunmaz: yıldız/elmas öğrenci kaydındaki özetten gelir // eslint-disable-line
 
   const upd = (fn) => { setDraft(d => { const n = fn(JSON.parse(JSON.stringify(d))); return n; }); setDirty(true); };
 
@@ -59,7 +66,7 @@ export function GameAdminPanel({ db, appId, cfg, setCfg, tests, setTests, fetchA
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-1.5 bg-slate-100 p-1.5 rounded-2xl">
-        {SUBTABS.map(([id, label]) => (
+        {subtabs.map(([id, label]) => (
           <button key={id} onClick={() => setSub(id)} className={`flex-1 min-w-[120px] py-2 px-2 rounded-xl text-xs font-black transition-all ${sub === id ? 'bg-white text-indigo-600 shadow' : 'text-slate-500'}`}>{label}</button>
         ))}
       </div>
@@ -77,6 +84,7 @@ export function GameAdminPanel({ db, appId, cfg, setCfg, tests, setTests, fetchA
       {sub === 'stars' && <StarsTab draft={draft} upd={upd} />}
       {sub === 'maps' && <MapsTab draft={draft} upd={upd} db={db} appId={appId} tests={tests} setTests={setTests} />}
       {sub === 'items' && <ItemsTab draft={draft} upd={upd} />}
+      {isAna && <div className="text-[11px] font-bold text-slate-400 text-center">Sınıfım oyun ayarları · öğrenci uygulamasında reklam yoktur.</div>}
       {sub === 'premium' && <PremiumTab db={db} appId={appId} childrenList={childrenList} setChildrenList={setChildrenList} tests={tests} responses={responses} cfg={draft} onStartTestMode={onStartTestMode} />}
       {sub === 'ads' && <AdsTab draft={draft} upd={upd} />}
     </div>
@@ -87,24 +95,83 @@ export function GameAdminPanel({ db, appId, cfg, setCfg, tests, setTests, fetchA
 // ⭐ YILDIZ KURALLARI
 // ----------------------------------------------------------------------------
 function StarsTab({ draft, upd }) {
+  const isAna = draft.appKind === 'ana';
+  const num = (v) => (v === '' ? 0 : Number(v));
+  const gm = draft.games || { enabled: true, off: {} };
   return (
     <div className="space-y-4">
-      <div className={box}>
-        <h4 className="font-black text-indigo-600 text-sm mb-1">test başına kazanılan yıldız</h4>
-        <p className="text-xs text-slate-500 font-bold mb-3">"hepsi doğru": testteki bütün soruları doğru yaparsa. "bitirdi": testi sonuna kadar çözdü ama yanlışı var. çocuk bir testten en fazla bir kez kazanır; sonra hepsini doğru yaparsa aradaki farkı alır.</p>
+      <div className={box + ' border-cyan-200 bg-cyan-50/50'}>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" className="w-5 h-5" checked={gm.enabled !== false} onChange={e => upd(x => { x.games = { ...(x.games || {}), enabled: e.target.checked, off: { ...(x.games?.off || {}) } }; return x; })} />
+          <span className="font-black text-cyan-800 text-sm">🎮 oyunlar sekmesi {gm.enabled !== false ? 'açık' : 'kapalı'}</span>
+        </label>
+        <p className="text-[11px] font-bold text-slate-500 mt-1">haritanın solunda, ödev sekmesinin altında görünür. oyunlar internetsiz çalışır, okuma harcamaz. istemediğiniz oyunun işaretini kaldırın:</p>
+        {gm.enabled !== false && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {MINI_GAMES.map(g => (
+              <label key={g.id} className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-xs font-black cursor-pointer ${gm.off?.[g.id] ? 'bg-white text-slate-400' : 'bg-cyan-100 border-cyan-300 text-cyan-900'}`}>
+                <input type="checkbox" checked={!gm.off?.[g.id]} onChange={e => upd(x => { const off = { ...(x.games?.off || {}) }; if (e.target.checked) delete off[g.id]; else off[g.id] = true; x.games = { enabled: true, ...(x.games || {}), off }; return x; })} />
+                {g.icon} {g.name}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      {isAna ? (
+        <div className={box + ' border-amber-200 bg-amber-50/50'}>
+          <h4 className="font-black text-amber-700 text-sm mb-1">⭐ yıldız (Sınıfım) · sadece ödev testleri</h4>
+          <p className="text-xs text-slate-600 font-bold mb-2">haritadaki testler yıldız <b>vermez</b> (elmas verir). yıldızı sadece <b>ödev</b> sayfasındaki testler verir; kaç yıldız verileceğini aşağıdan ayarlayın. çocukların daha önce kazandığı yıldızlar silinmez.</p>
+          <div className="grid grid-cols-2 gap-2 max-w-sm mb-2">
+            <div><div className={lbl}>ödev hepsi doğru 🌟</div><input type="number" min="0" className={inp + ' text-center'} value={draft.anaGorevStars?.perfect ?? 1} onChange={e => upd(x => { x.anaGorevStars = { ...(x.anaGorevStars || {}), perfect: num(e.target.value) }; return x; })} /></div>
+            <div><div className={lbl}>ödev yanlışla bitti ⭐</div><input type="number" min="0" className={inp + ' text-center'} value={draft.anaGorevStars?.completed ?? 0} onChange={e => upd(x => { x.anaGorevStars = { ...(x.anaGorevStars || {}), completed: num(e.target.value) }; return x; })} /></div>
+          </div>
+        </div>
+      ) : (
+        <div className={box}>
+          <h4 className="font-black text-indigo-600 text-sm mb-1">⭐ HARİTA testlerinden kazanılan yıldız</h4>
+          <p className="text-xs text-slate-500 font-bold mb-3">"hepsi doğru": testteki bütün soruları doğru yaparsa. "bitirdi": testi sonuna kadar çözdü ama yanlışı var. çocuk bir testten en fazla bir kez kazanır; sonra sadece yanlışlarını çözüp hepsini doğru yaparsa aradaki farkı alır.</p>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div />
+            <div className={lbl}>hepsi doğru 🌟</div>
+            <div className={lbl}>bitirdi ⭐</div>
+            {DIFFICULTIES.map(d => (
+              <React.Fragment key={d.id}>
+                <div className="flex items-center gap-2 font-black text-sm"><span className="w-3 h-3 rounded-full" style={{ background: d.color }} />{d.label} test</div>
+                <input type="number" min="0" className={inp + ' text-center'} value={draft.starRewards[d.id].perfect} onChange={e => upd(x => { x.starRewards[d.id].perfect = Number(e.target.value); return x; })} />
+                <input type="number" min="0" className={inp + ' text-center'} value={draft.starRewards[d.id].completed} onChange={e => upd(x => { x.starRewards[d.id].completed = Number(e.target.value); return x; })} />
+              </React.Fragment>
+            ))}
+            <div className="flex items-center gap-2 font-black text-sm">📋 ödev testleri</div>
+            <input type="number" min="0" className={inp + ' text-center'} value={draft.gorevStars?.perfect ?? 0} onChange={e => upd(x => { x.gorevStars = { ...(x.gorevStars || {}), perfect: num(e.target.value) }; return x; })} />
+            <input type="number" min="0" className={inp + ' text-center'} value={draft.gorevStars?.completed ?? 0} onChange={e => upd(x => { x.gorevStars = { ...(x.gorevStars || {}), completed: num(e.target.value) }; return x; })} />
+          </div>
+          <p className="text-[11px] text-slate-400 font-bold mt-2">günlük ödevler yıldız değil elmas kazandırır (ödev yıldızı 0). isterseniz ödevlere de yıldız verebilirsiniz.</p>
+        </div>
+      )}
+
+      <div className={box + ' border-cyan-200'}>
+        <h4 className="font-black text-cyan-700 text-sm mb-1 flex items-center gap-1"><DiamondShape size={20} /> elmas (karakter, ev, araba eşyaları elmasla alınır)</h4>
+        <p className="text-xs text-slate-500 font-bold mb-3">çocuk testi bitirince yıldızın yanında elmas da alır. elmaslar markette harcanır. yanlışla bitiren çocuk sadece yanlışlarını çözüp kalan elmasını da alır.</p>
         <div className="grid grid-cols-3 gap-2 text-center">
           <div />
-          <div className={lbl}>hepsi doğru 🌟</div>
-          <div className={lbl}>bitirdi ⭐</div>
-          {DIFFICULTIES.map(d => (
-            <React.Fragment key={d.id}>
-              <div className="flex items-center gap-2 font-black text-sm"><span className="w-3 h-3 rounded-full" style={{ background: d.color }} />{d.label} test</div>
-              <input type="number" min="0" className={inp + ' text-center'} value={draft.starRewards[d.id].perfect} onChange={e => upd(x => { x.starRewards[d.id].perfect = Number(e.target.value); return x; })} />
-              <input type="number" min="0" className={inp + ' text-center'} value={draft.starRewards[d.id].completed} onChange={e => upd(x => { x.starRewards[d.id].completed = Number(e.target.value); return x; })} />
+          <div className={lbl}>hepsi doğru 💎</div>
+          <div className={lbl}>bitirdi 💎</div>
+          {[['gorev', '📋 ödev testi'], ['harita', '🗺️ harita testi (ada)']].map(([ch, label]) => (
+            <React.Fragment key={ch}>
+              <div className="flex items-center gap-2 font-black text-sm">{label}</div>
+              <input type="number" min="0" className={inp + ' text-center'} value={draft.diamondRewards?.[ch]?.perfect ?? 0} onChange={e => upd(x => { x.diamondRewards = { ...(x.diamondRewards || {}), [ch]: { ...(x.diamondRewards?.[ch] || {}), perfect: num(e.target.value) } }; return x; })} />
+              <input type="number" min="0" className={inp + ' text-center'} value={draft.diamondRewards?.[ch]?.completed ?? 0} onChange={e => upd(x => { x.diamondRewards = { ...(x.diamondRewards || {}), [ch]: { ...(x.diamondRewards?.[ch] || {}), completed: num(e.target.value) } }; return x; })} />
             </React.Fragment>
           ))}
         </div>
+        <div className="grid sm:grid-cols-2 gap-3 mt-4">
+          <div><div className={lbl}>bir haritanın bütün adalarını bitirince EKSTRA elmas (büyük ödül)</div><input type="number" min="0" className={inp} value={draft.mapBonusDiamonds ?? 3} onChange={e => upd(x => { x.mapBonusDiamonds = num(e.target.value); return x; })} /></div>
+          <div><div className={lbl}>yeni oyuncuya hoş geldin elması</div><input type="number" min="0" className={inp} value={draft.welcomeDiamonds ?? 0} onChange={e => upd(x => { x.welcomeDiamonds = num(e.target.value); return x; })} /></div>
+          <div><div className={lbl}>bir elle boyama hakkı kaç elmas? (araç, ev, oda boyama)</div><input type="number" min="0" className={inp} value={draft.paintDiamonds ?? 2} onChange={e => upd(x => { x.paintDiamonds = num(e.target.value); return x; })} /></div>
+          <div><div className={lbl}>hazır eşyaların elmas fiyatı = eski yıldız fiyatı ×</div><input type="number" min="0.05" step="0.05" className={inp} value={draft.diamondPriceFactor ?? 0.5} onChange={e => upd(x => { x.diamondPriceFactor = Number(e.target.value) || 0.5; return x; })} /><div className="text-[10px] text-slate-400 font-bold mt-1">0.5 = yarı fiyat. elle fiyat verdiğiniz eşyalar bundan etkilenmez. toplu fiyat: "Dünya Kurucu & Market".</div></div>
+        </div>
       </div>
+
       <div className={box + ' grid sm:grid-cols-2 gap-4'}>
         <div>
           <div className={lbl}>sonraki ada ne zaman açılsın?</div>
@@ -113,19 +180,22 @@ function StarsTab({ draft, upd }) {
             <option value="perfect">sadece hepsi doğruysa</option>
           </select>
         </div>
-        <div>
+        {!isAna && <div>
           <div className={lbl}>zorluğu seçilmemiş testler</div>
           <select className={inp} value={draft.defaultDifficulty} onChange={e => upd(x => { x.defaultDifficulty = e.target.value; return x; })}>
             {DIFFICULTIES.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
           </select>
-        </div>
+        </div>}
         <div>
           <div className={lbl}>bir haritada kaç ada olsun? (otomatik dağıtım)</div>
           <input type="number" min="1" max="40" className={inp} value={draft.islandsPerMap} onChange={e => upd(x => { x.islandsPerMap = Number(e.target.value); return x; })} />
         </div>
         <div>
-          <div className={lbl}>bir elle boyama hakkı kaç yıldız? (araç, ev, oda boyama)</div>
-          <input type="number" min="0" className={inp} value={draft.paintPrice ?? 5} onChange={e => upd(x => { x.paintPrice = Number(e.target.value); return x; })} />
+          <div className={lbl}>haritada adaların altında test adı yazsın mı?</div>
+          <label className="flex items-center gap-2 font-bold text-sm text-slate-700 bg-white border-2 border-slate-200 rounded-xl px-3 py-2 cursor-pointer">
+            <input type="checkbox" checked={!!draft.showIslandNames} onChange={e => upd(x => { x.showIslandNames = e.target.checked; return x; })} />
+            {draft.showIslandNames ? 'evet: test adı görünür' : 'hayır: sadece ada numarası (ödevlerde ad görünür)'}
+          </label>
         </div>
         <div>
           <div className={lbl}>3D görünüm (karakter, ev, araba, harita)</div>
@@ -134,10 +204,10 @@ function StarsTab({ draft, upd }) {
             {draft.look3d !== false ? 'açık: çizimler ışık-gölgeli, hacimli' : 'kapalı: düz çizim'}
           </label>
         </div>
-        <div>
+        {!isAna && <div>
           <div className={lbl}>yeni oyuncuya hoş geldin yıldızı</div>
           <input type="number" min="0" className={inp} value={draft.welcomeStars} onChange={e => upd(x => { x.welcomeStars = Number(e.target.value); return x; })} />
-        </div>
+        </div>}
       </div>
     </div>
   );
@@ -157,6 +227,9 @@ function MapsTab({ draft, upd, db, appId, tests, setTests }) {
   const merged = tests.map(t => ({ ...t, ...(edits[t.id] || {}) }));
   const world = buildWorld(merged, draft);
   const unpublished = merged.filter(t => !t.isPublished || !(t.questionIds || []).length);
+  const gorevList = merged.filter(t => t.isPublished && (t.questionIds || []).length && testChannel(t, draft) === 'gorev');
+  const [galPage, setGalPage] = useState(0);
+  const GAL = 24;
   const editTest = (id, patch) => setEdits(e => ({ ...e, [id]: { ...(e[id] || {}), ...patch } }));
 
   const saveTests = async () => {
@@ -205,7 +278,11 @@ function MapsTab({ draft, upd, db, appId, tests, setTests }) {
           <option value="">zorluk: varsayılan</option>
           {DIFFICULTIES.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
         </select>
-        <span className="text-[10px] font-black text-amber-600 whitespace-nowrap" title="hepsi doğru / bitirdi">🌟{reward.perfect} / ⭐{reward.completed}</span>
+        <select className={`p-1.5 border rounded-lg text-xs font-black ${testChannel(t, draft) === 'gorev' ? 'bg-pink-50 text-pink-700 border-pink-200' : 'bg-sky-50 text-sky-700 border-sky-200'}`} value={testChannel(t, draft)} onChange={e => editTest(t.id, { channel: e.target.value })} title="bu test haritada mı, ödevlerde mi?">
+          <option value="harita">🗺️ harita</option>
+          <option value="gorev">📋 ödev</option>
+        </select>
+        <span className="text-[10px] font-black text-amber-600 whitespace-nowrap" title="hepsi doğru / bitirdi">🌟{reward.perfect} / ⭐{reward.completed} · 💎{getDiamondRewardFor(t, draft).perfect}</span>
         <input type="number" min="0" placeholder="özel 🌟" title="bu test için özel yıldız (hepsi doğru) - boş bırakılırsa zorluk ayarı geçerli" className="w-16 p-1.5 border rounded-lg text-xs font-bold" value={t.starPerfect ?? ''} onChange={e => editTest(t.id, { starPerfect: e.target.value === '' ? null : Number(e.target.value) })} />
         <input type="number" min="0" placeholder="özel ⭐" title="bu test için özel yıldız (bitirdi)" className="w-16 p-1.5 border rounded-lg text-xs font-bold" value={t.starCompleted ?? ''} onChange={e => editTest(t.id, { starCompleted: e.target.value === '' ? null : Number(e.target.value) })} />
       </div>
@@ -225,6 +302,31 @@ function MapsTab({ draft, upd, db, appId, tests, setTests }) {
 
   return (
     <div className="space-y-4">
+      <div className={box + ' border-emerald-200'}>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h4 className="font-black text-emerald-700 text-sm">🌍 {GENERATED_WORLD_COUNT} otomatik dünya · {PLACE_COUNT} farklı mekân</h4>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setGalPage(p => Math.max(0, p - 1))} className={`${btn} bg-slate-100 text-slate-600`}>‹</button>
+            <span className="text-xs font-black text-slate-500 w-24 text-center">{galPage * GAL + 1}-{Math.min(GENERATED_WORLD_COUNT, (galPage + 1) * GAL)}</span>
+            <button onClick={() => setGalPage(p => Math.min(Math.ceil(GENERATED_WORLD_COUNT / GAL) - 1, p + 1))} className={`${btn} bg-slate-100 text-slate-600`}>›</button>
+          </div>
+        </div>
+        <p className="text-[11px] font-bold text-slate-500 mb-3">yukarıdaki hazır haritalar ve sizin haritalarınız dolunca sıradaki testler otomatik olarak yeni dünyalara yerleşir. ilk {PLACE_COUNT} dünyanın her biri ayrı bir mekândır; sonra aynı mekânlar gece, kış, bahar, gün batımı, sonbahar, festival, büyülü gibi başka konseptlerle (farklı renk, hava ve süslerle) gelir.</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+          {Array.from({ length: GAL }).map((_, k) => {
+            const i = galPage * GAL + k;
+            if (i >= GENERATED_WORLD_COUNT) return null;
+            const w = getGeneratedWorld(i);
+            return (
+              <div key={i} className="rounded-xl overflow-hidden border-2 border-slate-100 bg-slate-50">
+                <WorldThumb wt={w.wt} w={150} h={96} seed={i + 3} />
+                <div className="px-1.5 py-1 text-[10px] font-black text-slate-600 leading-tight truncate" title={w.name}>{i + 1}. {w.emoji} {w.name}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className={box}>
         <div className="flex items-center justify-between mb-3">
           <h4 className="font-black text-indigo-600 text-sm">haritalar (sıra küçükten büyüğe)</h4>
@@ -233,7 +335,7 @@ function MapsTab({ draft, upd, db, appId, tests, setTests }) {
         <div className="grid sm:grid-cols-2 gap-2">
           {maps.map(m => (
             <div key={m.id} className={`flex items-center gap-2 p-2 rounded-2xl border-2 ${m.hidden ? 'opacity-50 border-dashed' : 'border-slate-100'}`}>
-              <div className="w-14 h-14 rounded-xl shrink-0 flex items-center justify-center text-2xl" style={m.bgImage ? { backgroundImage: `url(${m.bgImage})`, backgroundSize: 'cover' } : { background: `linear-gradient(180deg, ${m.sky[0]}, ${m.sky[1]}, ${m.sky[2]})` }}>{m.emoji}</div>
+              <div className="w-14 h-14 rounded-xl shrink-0 flex items-center justify-center text-2xl" style={m.bgImage ? { backgroundImage: `url(${m.bgImage})`, backgroundSize: 'cover' } : { background: `linear-gradient(180deg, ${(m.sky || ['#bae6fd', '#7dd3fc', '#38bdf8']).join(', ')})` }}>{m.emoji}</div>
               <div className="flex-1 min-w-0">
                 <input className="w-full font-black text-sm text-slate-700 bg-transparent outline-none border-b border-transparent focus:border-indigo-300" value={m.name} onChange={e => setOv(m.id, { name: e.target.value })} />
                 <div className="text-[10px] font-bold text-slate-400">{m.builtin ? 'hazır harita' : 'sizin haritanız'} · {(MAP_ARTS.find(a => a.id === m.art) || {}).label || ''} · {(CROSSINGS.find(c => c.id === m.crossing) || {}).label || ''}</div>
@@ -288,6 +390,12 @@ function MapsTab({ draft, upd, db, appId, tests, setTests }) {
           ))}
           {world.length === 0 && <div className="text-center text-slate-400 font-bold text-sm py-6">yayında soru içeren test yok.</div>}
         </div>
+        {gorevList.length > 0 && (
+          <div className="mt-4">
+            <div className="font-black text-pink-700 text-sm mb-1.5">📋 ödev testleri <span className="text-[10px] text-slate-400">({gorevList.length} · haritada görünmez, çocukta sol taraftaki "ödev" sekmesinde)</span></div>
+            <div className="space-y-1.5">{gorevList.map(t => renderTestRow({ t }))}</div>
+          </div>
+        )}
         <button onClick={() => setShowUnpublished(s => !s)} className="mt-4 text-xs font-black text-slate-400 hover:text-indigo-600">{showUnpublished ? '▼' : '▶'} yayında olmayan testler ({unpublished.length})</button>
         {showUnpublished && <div className="space-y-1.5 mt-2 opacity-70">{unpublished.map(t => renderTestRow({ t }))}</div>}
       </div>
@@ -334,11 +442,38 @@ function ItemsTab({ draft, upd }) {
   const list = all.filter(i => i.cat === cat);
   const catInfo = CATEGORY_BY_ID[cat];
 
+  // fiyatlar ELMAS (dprice). eski yıldız fiyatı (price) dokunulmadan kalır.
   const setPrice = (it, price) => upd(x => {
-    if (it.builtin) x.itemOverrides[it.id] = { ...(x.itemOverrides[it.id] || {}), price: Number(price) };
-    else x.customItems = x.customItems.map(c => c.id === it.id ? { ...c, price: Number(price) } : c);
+    const v = price === '' ? null : Math.max(0, Math.round(Number(price) || 0));
+    if (it.builtin) x.itemOverrides[it.id] = { ...(x.itemOverrides[it.id] || {}), dprice: v };
+    else x.customItems = x.customItems.map(c => c.id === it.id ? { ...c, dprice: v } : c);
     return x;
   });
+  // --- TOPLU ELMAS FİYATI ---
+  const [bp, setBp] = useState({ scope: 'cat', mode: 'same', value: 2, pct: 50, min: 1, max: 30, free: false });
+  const applyBulkPrice = () => {
+    const scopeItems = (bp.scope === 'all' ? all : list).filter(it => bp.free || (Number(it.starPrice) || 0) > 0 || (Number(it.price) || 0) > 0);
+    if (!scopeItems.length) return alert('değiştirilecek eşya yok.');
+    let calc;
+    if (bp.mode === 'same') calc = () => Math.max(0, Math.round(Number(bp.value) || 0));
+    else if (bp.mode === 'pct') calc = (it) => Math.max(1, Math.round((Number(it.price) || 0) * (Number(bp.pct) || 100) / 100));
+    else if (bp.mode === 'range') {
+      const sorted = [...scopeItems].sort((a, b) => (Number(a.starPrice) || 0) - (Number(b.starPrice) || 0));
+      const rank = new Map(sorted.map((it, i) => [it.id, sorted.length > 1 ? i / (sorted.length - 1) : 0]));
+      const lo = Math.max(0, Number(bp.min) || 0), hi = Math.max(lo, Number(bp.max) || lo);
+      calc = (it) => Math.round(lo + (hi - lo) * rank.get(it.id));
+    } else calc = () => null; // 'reset': elle verilen fiyatları kaldır (oran geçerli olur)
+    const label = bp.mode === 'reset' ? 'elle verilen elmas fiyatları kaldırılsın (hazır oran geçerli olsun)' : 'yeni elmas fiyatı verilsin';
+    if (!window.confirm(`${scopeItems.length} eşyaya ${label} mi?`)) return;
+    upd(x => {
+      scopeItems.forEach(it => {
+        const v = calc(it);
+        if (it.builtin) x.itemOverrides[it.id] = { ...(x.itemOverrides[it.id] || {}), dprice: v };
+        else x.customItems = x.customItems.map(c => c.id === it.id ? { ...c, dprice: v } : c);
+      });
+      return x;
+    });
+  };
   const toggleHide = (it) => upd(x => {
     if (it.builtin) x.itemOverrides[it.id] = { ...(x.itemOverrides[it.id] || {}), hidden: !it.hidden };
     else x.customItems = x.customItems.map(c => c.id === it.id ? { ...c, hidden: !it.hidden } : c);
@@ -356,7 +491,7 @@ function ItemsTab({ draft, upd }) {
   const slotOptions = form?.cat === 'furniture' ? ROOM_SLOTS : form?.cat === 'carDecor' ? CAR_SLOTS : form?.cat === 'carMod' ? CAR_MOD_SLOTS : null;
 
   const toItem = (f) => ({
-    id: f.id || uid('it'), cat: f.cat, name: String(f.name || '').trim(), price: Number(f.price) || 0,
+    id: f.id || uid('it'), cat: f.cat, name: String(f.name || '').trim(), price: Number(f.price) || 0, dprice: Number(f.price) || 0,
     image: f.image || '', slot: f.slot || '', roomNames: f.roomNames || '',
     render: { color: f.color || '', emoji: f.emoji || '', ...(f.cat === 'car' ? { vtype: f.vtype || 'car' } : {}), ...(f.cat === 'location' ? { scene: f.scene || 'meadow', water: ['island', 'beach', 'lake', 'river', 'cliff'].includes(f.scene) } : {}) },
     adjust: { x: Number(f.adjust?.x) || 0, y: Number(f.adjust?.y) || 0, s: Number(f.adjust?.s) || 1 },
@@ -445,7 +580,7 @@ function ItemsTab({ draft, upd }) {
         <p className="text-[11px] font-bold text-slate-500 mb-3">her şeyi kendi resimlerinizle ekleyebilirsiniz: karakter, saç, kıyafet, ev, oda eşyası, araba... "hazırları gizle" ile sadece sizin dünyanız görünür.</p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <button onClick={() => setForm({ ...EMPTY_ITEM, cat, fit: CHAR_CATS.includes(cat) ? 'template' : 'box' })} className="p-3 rounded-2xl bg-indigo-600 text-white font-black text-xs active:scale-95">➕ resimli yeni eşya</button>
-          <button onClick={() => setBulk({ cat, price: 5, slot: cat === 'furniture' ? '' : '', fit: 'template' })} className="p-3 rounded-2xl bg-sky-500 text-white font-black text-xs active:scale-95">📦 toplu resim yükle</button>
+          <button onClick={() => setBulk({ cat, price: 2, slot: cat === 'furniture' ? '' : '', fit: 'template' })} className="p-3 rounded-2xl bg-sky-500 text-white font-black text-xs active:scale-95">📦 toplu resim yükle</button>
           <button onClick={() => downloadTemplate('png')} className="p-3 rounded-2xl bg-emerald-500 text-white font-black text-xs active:scale-95">📐 karakter şablonu (png)</button>
           {hasSample
             ? <button onClick={removeSample} className="p-3 rounded-2xl bg-rose-100 text-rose-600 font-black text-xs active:scale-95">🗑 örnek dünyayı kaldır</button>
@@ -481,9 +616,9 @@ function ItemsTab({ draft, upd }) {
             <div key={it.id} className={`rounded-2xl border-2 p-2 flex flex-col items-center ${it.hidden ? 'opacity-40 border-dashed' : 'border-slate-100'}`}>
               <ItemThumb item={it} game={game} itemMap={itemMap} size={96} />
               <div className="text-[11px] font-black text-slate-700 text-center leading-tight min-h-[28px]">{it.name}{it.slot ? <span className="block text-[9px] text-slate-400">{(ROOM_SLOTS[it.slot] || CAR_SLOTS[it.slot])?.label}</span> : null}{!it.builtin && <span className="block text-[9px] text-indigo-400">{it.sample ? 'örnek' : 'sizin'}</span>}</div>
-              <div className="flex items-center gap-1 mt-1">
-                <span className="text-xs">⭐</span>
-                <input type="number" min="0" className="w-14 p-1 border rounded-lg text-xs font-black text-center" value={it.price} onChange={e => setPrice(it, e.target.value)} />
+              <div className="flex items-center gap-1 mt-1" title={`eski yıldız fiyatı: ${it.starPrice ?? '-'}`}>
+                <DiamondShape size={16} />
+                <input type="number" min="0" className={`w-14 p-1 border rounded-lg text-xs font-black text-center ${it.dprice !== undefined && it.dprice !== null && it.dprice !== '' ? 'border-cyan-400 bg-cyan-50' : ''}`} value={it.price} onChange={e => setPrice(it, e.target.value)} />
               </div>
               <div className="flex gap-1 mt-1.5 flex-wrap justify-center">
                 <button onClick={() => toggleHide(it)} className={`${btn} !px-2 !py-1 ${it.hidden ? 'bg-slate-200 text-slate-500' : 'bg-green-100 text-green-700'}`}>{it.hidden ? 'gizli' : 'satışta'}</button>
@@ -494,7 +629,36 @@ function ItemsTab({ draft, upd }) {
           ))}
           {list.length === 0 && <div className="col-span-full text-center text-slate-400 font-bold text-sm py-6">bu kategoride eşya yok · ➕ ile ekleyin</div>}
         </div>
-        <p className="text-[11px] font-bold text-slate-400 mt-3">fiyatı 0 olan eşyalar herkese ücretsizdir. gizlenen eşya markette görünmez; daha önce alan çocuklarda kalır.</p>
+        <p className="text-[11px] font-bold text-slate-400 mt-3">fiyatlar ELMAS'tır. fiyatı 0 olan eşyalar herkese ücretsizdir. mavi çerçeveli fiyatı siz verdiniz; diğerleri eski yıldız fiyatı × oran. gizlenen eşya markette görünmez; daha önce alan çocuklarda kalır.</p>
+      </div>
+
+      <div className={box + ' border-cyan-200'}>
+        <h4 className="font-black text-cyan-700 text-sm mb-1 flex items-center gap-1"><DiamondShape size={18} /> toplu elmas fiyatı</h4>
+        <p className="text-[11px] font-bold text-slate-500 mb-3">bir kategorideki ya da bütün eşyaların fiyatını tek seferde değiştirin. sonra "oyun ayarlarını kaydet".</p>
+        <div className="grid sm:grid-cols-4 gap-3 items-end">
+          <div><div className={lbl}>hangi eşyalar</div>
+            <select className={inp} value={bp.scope} onChange={e => setBp({ ...bp, scope: e.target.value })}>
+              <option value="cat">bu kategori ({catInfo?.label})</option>
+              <option value="all">bütün eşyalar</option>
+            </select>
+          </div>
+          <div><div className={lbl}>nasıl</div>
+            <select className={inp} value={bp.mode} onChange={e => setBp({ ...bp, mode: e.target.value })}>
+              <option value="same">hepsine aynı fiyat</option>
+              <option value="pct">şimdiki fiyatın yüzdesi</option>
+              <option value="range">ucuzdan pahalıya aralığa yay</option>
+              <option value="reset">elle verilenleri sil (oran geçerli)</option>
+            </select>
+          </div>
+          {bp.mode === 'same' && <div><div className={lbl}>elmas</div><input type="number" min="0" className={inp} value={bp.value} onChange={e => setBp({ ...bp, value: e.target.value })} /></div>}
+          {bp.mode === 'pct' && <div><div className={lbl}>yüzde (50 = yarıya indir)</div><input type="number" min="1" className={inp} value={bp.pct} onChange={e => setBp({ ...bp, pct: e.target.value })} /></div>}
+          {bp.mode === 'range' && <div className="grid grid-cols-2 gap-2"><div><div className={lbl}>en ucuz</div><input type="number" min="0" className={inp} value={bp.min} onChange={e => setBp({ ...bp, min: e.target.value })} /></div><div><div className={lbl}>en pahalı</div><input type="number" min="0" className={inp} value={bp.max} onChange={e => setBp({ ...bp, max: e.target.value })} /></div></div>}
+          {bp.mode === 'reset' && <div className="text-[11px] font-bold text-slate-500">oran: eski yıldız fiyatı × {draft.diamondPriceFactor ?? 0.5}</div>}
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-1.5 text-[11px] font-black text-slate-500"><input type="checkbox" checked={bp.free} onChange={e => setBp({ ...bp, free: e.target.checked })} /> ücretsizleri de değiştir</label>
+            <button onClick={applyBulkPrice} className={`${btn} bg-cyan-600 text-white`}>uygula</button>
+          </div>
+        </div>
       </div>
 
       <div className={box}>
@@ -517,7 +681,7 @@ function ItemsTab({ draft, upd }) {
           <h4 className="font-black text-sky-600 text-sm mb-2">📦 toplu resim yükle</h4>
           <div className="grid sm:grid-cols-4 gap-3 items-end">
             <div><div className={lbl}>kategori</div><select className={inp} value={bulk.cat} onChange={e => setBulk({ ...bulk, cat: e.target.value })}>{CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}</select></div>
-            <div><div className={lbl}>fiyat (hepsi)</div><input type="number" min="0" className={inp} value={bulk.price} onChange={e => setBulk({ ...bulk, price: e.target.value })} /></div>
+            <div><div className={lbl}>elmas fiyatı (hepsi)</div><input type="number" min="0" className={inp} value={bulk.price} onChange={e => setBulk({ ...bulk, price: e.target.value })} /></div>
             {(bulk.cat === 'furniture' || bulk.cat === 'carDecor') && <div><div className={lbl}>ilk konacağı yer</div><select className={inp} value={bulk.slot} onChange={e => setBulk({ ...bulk, slot: e.target.value })}><option value="">{bulk.cat === 'furniture' ? 'odanın ortası' : 'seçin'}</option>{Object.entries(bulk.cat === 'furniture' ? ROOM_SLOTS : CAR_SLOTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></div>}
             {CHAR_CATS.includes(bulk.cat) && <div><div className={lbl}>yerleşim</div><select className={inp} value={bulk.fit} onChange={e => setBulk({ ...bulk, fit: e.target.value })}><option value="template">şablon (200×260 tuval)</option><option value="box">parçanın kutusuna sığdır</option></select></div>}
           </div>
@@ -540,7 +704,7 @@ function ItemsTab({ draft, upd }) {
                 </select>
               </div>
               <div><div className={lbl}>adı</div><input className={inp} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
-              <div><div className={lbl}>fiyat (yıldız)</div><input type="number" min="0" className={inp} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
+              <div><div className={lbl}>fiyat (elmas)</div><input type="number" min="0" className={inp} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
               {slotOptions && (
                 <div><div className={lbl}>{form.cat === 'furniture' ? 'odada ilk konacağı yer (sonra sürüklenir)' : 'nereye konacak?'}</div>
                   <select className={inp} value={form.slot} onChange={e => setForm({ ...form, slot: e.target.value })}>
@@ -764,13 +928,15 @@ function PremiumTab({ db, appId, childrenList, setChildrenList, tests, responses
         <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
           {list.map(c => {
             const dirty = !!rowEdits[c.id];
-            const bal = getStarBalance(c, tests, responses, cfg);
+            const starsEarned = storedStars(c) ?? '—';
+            const dBal = storedDiamondBalance(c) ?? '—';
             return (
               <div key={c.id} className={`flex flex-wrap items-center gap-2 p-2 rounded-xl border ${val(c, 'premium') ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
                 <div className="flex-1 min-w-[150px]">
                   <div className="font-black text-sm text-slate-700">{val(c, 'premium') ? '👑 ' : ''}{c.name} {c.isGuest && <span className="text-[9px] font-black bg-sky-100 text-sky-600 rounded px-1">kendi kaydoldu</span>}</div>
-                  <div className="text-[10px] font-bold text-slate-400">numara: {c.childId} · ⭐ {bal} · harcanan {c.game?.spent || 0}</div>
+                  <div className="text-[10px] font-bold text-slate-400">numara: {c.childId} · ⭐ {starsEarned} · 💎 {dBal} (harcanan {c.game?.dspent || 0})</div>
                 </div>
+                <label className="text-[10px] font-black text-cyan-600" title="yöneticinin hediye ettiği elmas (eksi de yazılabilir)">💎 hediye<input type="number" className="block w-16 p-1 border rounded-lg text-xs font-bold" value={val(c, 'manualDiamonds') ?? ''} onChange={e => edit(c, { manualDiamonds: e.target.value === '' ? 0 : Number(e.target.value) })} placeholder="0" /></label>
                 <label className="text-[10px] font-black text-slate-500">şifre<input className="block w-20 p-1 border rounded-lg text-xs font-bold" value={val(c, 'pin') || ''} onChange={e => edit(c, { pin: e.target.value })} placeholder="yok" /></label>
                 <label className="text-[10px] font-black text-slate-500">bitiş<input type="date" className="block p-1 border rounded-lg text-xs font-bold" value={val(c, 'premiumUntil') || ''} onChange={e => edit(c, { premiumUntil: e.target.value })} /></label>
                 <button onClick={() => edit(c, { premium: !val(c, 'premium') })} className={`${btn} ${val(c, 'premium') ? 'bg-amber-400 text-amber-950' : 'bg-white border text-slate-500'}`}>{val(c, 'premium') ? '👑 premium' : 'normal'}</button>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { onSnapshot, doc, setDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { X, ChevronLeft, ChevronRight, Save, Settings2, Move, Palette, ArrowRight, FolderOpen, Loader2, CheckCircle2 } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Save, Settings2, Move, Palette, ArrowRight, FolderOpen, Loader2, CheckCircle2, EyeOff } from 'lucide-react';
 import { appId } from '../../constants';
 import { FancyAudioPlayer, OptionAudioButton } from '../common/AudioPlayers';
 import { RenderTextWithHighlights } from '../common/RenderTextWithHighlights';
@@ -25,12 +25,13 @@ import { SequenceMemoryPad } from '../../activities/sequenceMemory';
 const BULK_STYLE_FIELDS = [
   { key: 'imgScale', label: 'görsel boyutu' },
   { key: 'qContainerScale', label: 'soru kutusu' },
-  { key: 'qScale', label: 'soru yazısı' },
+  { key: 'qScale', label: 'soru yazısı boyutu' },
   { key: 'boxScale', label: 'seçenek / etkinlik kutusu' },
   { key: 'optImgScale', label: 'seçenek görseli' },
-  { key: 'textScale', label: 'seçenek yazısı' },
+  { key: 'textScale', label: 'seçenek yazısı boyutu' },
   { key: 'colors', label: 'yazı renkleri' },
-  { key: 'letterColors', label: 'harf boyamaları (soruya özel!)' }
+  { key: 'letterColors', label: 'harf boyamaları (soruya özel!)' },
+  { key: 'textVisibility', label: 'yazıyı gizle/göster (soru + şık)' }
 ];
 
 export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, editorContextList, folders = [], initialBulkFolderId = null, onBulkApply }) {
@@ -45,6 +46,9 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
   const [optImgScale, setOptImgScale] = useState(q.style?.optImgScale || 1);
 
   const [letterColors, setLetterColors] = useState(q.style?.letterColors || { question: {}, options: {} });
+  // Ekranda yazı: çocuk soru / şık yazısını görsün mü? (ses ve telefonla okuma devam eder)
+  const [hideQ, setHideQ] = useState(q.hideText === true);
+  const [hideO, setHideO] = useState(q.hideOptionText === true);
 
   const [paintMode, setPaintMode] = useState(false);
   const [activeColor, setActiveColor] = useState('#EF4444');
@@ -74,7 +78,7 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
   const [bulkIncludeSub, setBulkIncludeSub] = useState(true);
   const [bulkFields, setBulkFields] = useState(() => {
     const init = {};
-    BULK_STYLE_FIELDS.forEach(f => { init[f.key] = f.key !== 'letterColors'; });
+    BULK_STYLE_FIELDS.forEach(f => { init[f.key] = f.key !== 'letterColors' && f.key !== 'textVisibility'; });
     return init;
   });
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -115,13 +119,14 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
     if (bulkFields.textScale) subset.textScale = textScale;
     if (bulkFields.colors) { subset.qColor = qColor; subset.optColor = optColor; }
     if (bulkFields.letterColors) subset.letterColors = letterColors;
-    if (Object.keys(subset).length === 0) { alert('en az bir ayar seçin.'); return; }
+    const extra = bulkFields.textVisibility ? { hideText: hideQ, hideOptionText: hideO } : null;
+    if (Object.keys(subset).length === 0 && !extra) { alert('en az bir ayar seçin.'); return; }
     const targetFolders = bulkIncludeSub ? getDescendants(bulkFolderId) : [bulkFolderId];
-    if (!window.confirm(`"${bulkFolderName}" klasörü${bulkIncludeSub ? ' ve alt klasörleri' : ''} içindeki TÜM sorulara bu görünüm ayarları uygulansın mı?`)) return;
+    if (!window.confirm(`"${bulkFolderName}" klasörü${bulkIncludeSub ? ' ve alt klasörleri' : ''} içindeki TÜM sorulara bu görünüm ayarları uygulansın mı?${extra ? `\n\nsoru yazısı: ${hideQ ? 'GİZLİ' : 'görünür'} • şık yazısı: ${hideO ? 'GİZLİ' : 'görünür'}` : ''}`)) return;
     setBulkBusy(true);
     setBulkMsg('uygulanıyor...');
     try {
-      const n = await onBulkApply(targetFolders, subset, (done, total) => setBulkMsg(`uygulanıyor... ${done}/${total}`));
+      const n = await onBulkApply(targetFolders, subset, (done, total) => setBulkMsg(`uygulanıyor... ${done}/${total}`), extra);
       setBulkMsg(n > 0 ? `✓ ${n} soruya uygulandı` : 'klasörde soru bulunamadı');
     } catch (e) {
       console.error(e);
@@ -155,6 +160,8 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
     setOptColor(q.style?.optColor || '#334155');
     setOptImgScale(q.style?.optImgScale || 1);
     setLetterColors(q.style?.letterColors || { question: {}, options: {} });
+    setHideQ(q.hideText === true);
+    setHideO(q.hideOptionText === true);
   }, [q]);
 
   const handleNav = (direction) => {
@@ -172,7 +179,8 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
 
   const handleSaveClick = async () => {
       setSaveStatus("kaydediliyor...");
-      await onSave(q.id, { qScale, textScale, boxScale, imgScale, qContainerScale, qColor, optColor, letterColors, optImgScale }, saveAsDefault);
+      await onSave(q.id, { qScale, textScale, boxScale, imgScale, qContainerScale, qColor, optColor, letterColors, optImgScale }, saveAsDefault, { hideText: hideQ, hideOptionText: hideO });
+      setQ(prev => prev ? { ...prev, hideText: hideQ, hideOptionText: hideO } : prev);
       setSaveStatus("kaydedildi!");
       setTimeout(() => setSaveStatus(""), 2000);
   };
@@ -324,7 +332,7 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
   const optionTextStyle = { fontSize: `${1.125 * textScale}rem`, color: optColor };
 
   const presetColors = ['#ef4444', '#f97316', '#f59e0b', '#10b981', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899', '#000000', '#ffffff'];
-  const hasVisibleHeaderInPreview = Boolean(q.customAttachmentImage || (!isInteractiveGridQuestion && q.image) || q.text || q.audio);
+  const hasVisibleHeaderInPreview = Boolean(q.customAttachmentImage || (!isInteractiveGridQuestion && q.image) || (q.text && !hideQ) || q.audio);
 
   return (
     <div className="fixed inset-0 z-[200] bg-[#F8FAFC] w-full h-full flex flex-col font-sans">
@@ -370,6 +378,26 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
             </div>
 
             <div className="p-4 space-y-4 overflow-y-auto max-h-[70vh] custom-scrollbar" onMouseDown={e => e.stopPropagation()}>
+               {/* EKRANDA YAZI: soru / şık yazısını gizle */}
+               <div className="bg-violet-50 border border-violet-100 p-3 rounded-xl space-y-2">
+                   <span className="text-xs font-black text-violet-700 uppercase flex items-center gap-1"><EyeOff size={14}/> ekranda yazı</span>
+                   <div className="flex items-center justify-between gap-2">
+                       <span className="text-[10px] font-bold text-slate-600">soru yazısı</span>
+                       <div className="flex rounded-lg overflow-hidden border border-violet-200">
+                           <button type="button" onClick={() => setHideQ(false)} className={`px-2.5 py-1 text-[10px] font-black ${!hideQ ? 'bg-violet-600 text-white' : 'bg-white text-violet-600'}`}>göster</button>
+                           <button type="button" onClick={() => setHideQ(true)} className={`px-2.5 py-1 text-[10px] font-black ${hideQ ? 'bg-violet-600 text-white' : 'bg-white text-violet-600'}`}>gizle</button>
+                       </div>
+                   </div>
+                   <div className="flex items-center justify-between gap-2">
+                       <span className="text-[10px] font-bold text-slate-600">şık yazısı</span>
+                       <div className="flex rounded-lg overflow-hidden border border-violet-200">
+                           <button type="button" onClick={() => setHideO(false)} className={`px-2.5 py-1 text-[10px] font-black ${!hideO ? 'bg-violet-600 text-white' : 'bg-white text-violet-600'}`}>göster</button>
+                           <button type="button" onClick={() => setHideO(true)} className={`px-2.5 py-1 text-[10px] font-black ${hideO ? 'bg-violet-600 text-white' : 'bg-white text-violet-600'}`}>gizle</button>
+                       </div>
+                   </div>
+                   <p className="text-[9px] leading-tight text-slate-500">ses ve telefonla okuma devam eder. bu soru için "kaydet"e basın; klasörün tamamı için aşağıda "yazıyı gizle/göster" kutusunu işaretleyip klasöre uygulayın.</p>
+               </div>
+
                {/* KLASÖRE TOPLU UYGULA */}
                <div className={`border-2 rounded-xl overflow-hidden ${bulkOpen ? 'border-emerald-300 bg-emerald-50/70' : 'border-slate-200 bg-white'}`}>
                    <button type="button" onClick={() => setBulkOpen(!bulkOpen)} className="w-full flex items-center justify-between px-3 py-2 text-left">
@@ -502,7 +530,7 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
                              <FancyAudioPlayer src={q.audio} autoPlay={false} label="" color="orange" size="small" />
                          </div>
                      )}
-                     {q.text && (
+                     {q.text && !hideQ && (
                          <h3 className="font-black text-center leading-tight transition-all duration-300 mt-1" style={{...questionTextStyle, color: undefined}}>
                              <RenderTextWithHighlights
                                  text={q.text}
@@ -584,7 +612,7 @@ export function QuestionPreviewEditor({ q, allQuestions, setQ, onClose, onSave, 
                         <div key={i} className="bg-white border-2 border-slate-200 rounded-xl flex flex-col items-center justify-center text-center shadow-sm hover:border-indigo-300 transition-all duration-300 border-b-4 gap-1 p-2" style={optionButtonStyle}>
                             {opt.audio && <OptionAudioButton src={opt.audio} small />}
                             {opt.image && <img src={opt.image} draggable="false" className="object-contain" style={{ height: opt.text ? `${75 * optImgScale}%` : `${100 * optImgScale}%` }} />}
-                            {opt.text && (
+                            {opt.text && !hideO && (
                                 <span className="font-bold leading-tight" style={{...optionTextStyle, color: undefined}}>
                                     <RenderTextWithHighlights
                                         text={opt.text}

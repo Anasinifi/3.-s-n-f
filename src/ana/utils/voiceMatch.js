@@ -13,6 +13,7 @@ import { IMG_CODES, imgHash } from './imgCodes';
 const AUDIO_EXT = /\.(mp3|wav|m4a|ogg|oga|aac|webm|flac|mp4|jpe?g|png|webp|gif|svg|avif)$/i; // ses + görsel uzantıları
 
 export const foldKey = (text) => String(text || '')
+  .replace(/<\/?en>/gi, ' ')
   .replace(/\|\|/g, ' ')
   .toLocaleLowerCase('tr-TR')
   .replace(/ı/g, 'i')
@@ -138,12 +139,14 @@ export const buildImageIndex = (bank, keys, { withMain = true } = {}) => {
   };
   keys.forEach(key => {
     bank.getTemplates(key).forEach((t, idx) => {
-      (t.options || []).forEach((o, j) => { const v = o.text || o.tts || o.imgName; if (v) add(v, { key, idx, slot: `o${o.slot ?? j}` }); });
-      if (withMain && t.text) add(t.text, { key, idx, slot: 'main' });
+      (t.options || []).forEach((o, j) => { const v = o.imgName || o.text || o.tts; if (v) add(v, { key, idx, slot: `o${o.slot ?? j}` }); });
+      // soru görseli: şablonun görsel adı (mainImgName) varsa her zaman, yoksa (seçilirse) soru metni
+      if (t.mainImgName) add(t.mainImgName, { key, idx, slot: 'main', named: true });
+      else if (withMain && t.text) add(t.text, { key, idx, slot: 'main' });
     });
   });
   // aynı metin hem şık hem soru olarak geçiyorsa: şık önceliklidir
-  map.forEach(v => { if (v.targets.some(t => t.slot !== 'main')) v.targets = v.targets.filter(t => t.slot !== 'main'); });
+  map.forEach(v => { if (v.targets.some(t => t.slot !== 'main')) v.targets = v.targets.filter(t => t.slot !== 'main' || t.named); });
   // numara → anahtar (yalnızca seçilen kapsamdaki görseller)
   const byHash = new Map(); map.forEach((v, k) => byHash.set(imgHash(k), k));
   const codes = new Map(); const allCodes = new Set();

@@ -12,6 +12,7 @@ import { sfx, say } from './fx';
 import { ItemThumb } from './ItemPicker';
 import { PaintedLayer, PaintCapture, PaintBar, PaintConfirm, MAX_STROKES } from './Paint';
 import { Cloud, Oak, Pine, Bush, Flowers } from './MapArt';
+import { DiamondShape } from './Celebration';
 
 // ============================================================================
 // --- GRUP: KARAKTERİM / EVİM / ARABAM (STÜDYO) ---
@@ -71,7 +72,7 @@ export function Studio({ child, game, setGame, itemMap, items, balance, buy, onC
   const [toast, setToast] = useState('');
   const flash = (t) => { setToast(t); say(t); setTimeout(() => setToast(''), 1800); };
 
-  // --- ELLE BOYAMA (yıldızla alınan boyama hakkı) ---
+  // --- ELLE BOYAMA (elmasla alınan boyama hakkı) ---
   const [paintAsk, setPaintAsk] = useState(null);   // boyanacak anahtar (onay bekliyor)
   const [painting, setPainting] = useState(null);   // şu an boyanan anahtar
   const [pColor, setPColor] = useState('#ef4444');
@@ -79,7 +80,7 @@ export function Studio({ child, game, setGame, itemMap, items, balance, buy, onC
   const askPaint = (key) => { say('boyama'); setPaintAsk(key); };
   const confirmPaint = () => {
     const key = paintAsk;
-    setGame(g => ((g.paintTokens || 0) > 0 ? { ...g, paintTokens: g.paintTokens - 1 } : { ...g, spent: (Number(g.spent) || 0) + paintPrice }));
+    setGame(g => ((g.paintTokens || 0) > 0 ? { ...g, paintTokens: g.paintTokens - 1 } : { ...g, dspent: (Number(g.dspent) || 0) + paintPrice }));
     setPaintAsk(null); setPainting(key); sfx('buy');
   };
   const addStroke = (st) => setGame(g => ({ ...g, paints: { ...(g.paints || {}), [painting]: [...(g.paints?.[painting] || []), st].slice(-MAX_STROKES) } }));
@@ -225,7 +226,7 @@ export function Studio({ child, game, setGame, itemMap, items, balance, buy, onC
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-1 bg-yellow-300 border-4 border-white rounded-full pl-2 pr-3 py-0.5 shadow-lg"><span className="text-lg">⭐</span><span className="text-lg font-extrabold text-amber-900">{balance >= 999999 ? "∞" : balance}</span></div>
+        <div className="flex items-center gap-1 bg-cyan-300 border-4 border-white rounded-full pl-1 pr-3 py-0.5 shadow-lg" title="elmasların"><DiamondShape size={24} /><span className="text-lg font-extrabold text-cyan-900">{balance >= 999999 ? "∞" : balance}</span></div>
       </div>
 
       {/* KARAKTERİM */}
@@ -356,7 +357,7 @@ export function Studio({ child, game, setGame, itemMap, items, balance, buy, onC
               <div className="max-w-2xl mx-auto">
                 <div className="bg-white rounded-3xl p-4 text-center shadow mb-3">
                   <div className="text-xl font-extrabold text-slate-700">{vt === 'car' ? 'henüz araban yok' : vt === 'air' ? 'henüz uçan aracın yok' : 'henüz teknen yok'}</div>
-                  <div className="text-sm font-bold text-slate-500">yıldız topla ve al! {vt === 'air' ? 'uçağın ya da helikopterin evinin üstünde uçar.' : vt === 'sea' ? 'teknen deniz ya da göl kenarındaki evinin önünde durur.' : ''}</div>
+                  <div className="text-sm font-bold text-slate-500">elmas topla ve al! {vt === 'air' ? 'uçağın ya da helikopterin evinin üstünde uçar.' : vt === 'sea' ? 'teknen deniz ya da göl kenarındaki evinin önünde durur.' : ''}</div>
                 </div>
                 <ItemPicker inline items={(byCat.car || []).filter(it => vtypeOf(it) === vt)} currentId={null} isOwned={isOwned} balance={balance} game={game} itemMap={itemMap} onBuy={buy}
                   onSelect={(it) => it && setGame(g => ({ ...g, [vtypeOf(it)]: it.id }))} />
@@ -412,7 +413,7 @@ export function Studio({ child, game, setGame, itemMap, items, balance, buy, onC
               <div className="bg-white rounded-3xl p-6 text-center shadow">
                 <div className="text-5xl">🎒</div>
                 <div className="text-xl font-extrabold text-slate-700 mt-1">henüz bir şey almadın</div>
-                <div className="text-sm font-bold text-slate-500">testleri çöz, yıldız topla, marketten al. aldıkların burada durur!</div>
+                <div className="text-sm font-bold text-slate-500">ödevleri ve haritaları bitir, elmas topla, marketten al. aldıkların burada durur!</div>
               </div>
             )}
             {ownedGroups.map(({ c, list }) => (
